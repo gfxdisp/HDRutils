@@ -16,6 +16,7 @@ setup(
           'rawpy',
           'exifread',
           'tqdm',
+          'colour-demosaicing'
       ],
   classifiers=[
     'Development Status :: 3 - Alpha',

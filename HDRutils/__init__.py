@@ -1,2 +1,2 @@
-from HDRutils.merge import imread_merge
-from HDRutils.merge import imread_merge_demosaic
+from HDRutils.merge import merge
+from HDRutils.io import imread, imwrite

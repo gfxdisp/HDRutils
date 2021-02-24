@@ -13,7 +13,7 @@ def get_metadata(files, log, color_space, wb):
 	:files: filenames containing the inpt images
 	:log: instance of logging for warnings and verbose information
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
-	:wb: White-balance to use. Pick 1 of [auto, camera, average, none]
+	:wb: White-balance to use. Pick 1 of [camera, auto, average, none]
 	:return: A dictonary containing all the metadata
 	"""
 
@@ -59,8 +59,8 @@ def get_metadata(files, log, color_space, wb):
 	elif color_space == 'Adobe':
 		data['colorspace'] = rawpy.ColorSpace.Adobe
 
-	assert wb in ['auto', 'camera', 'average', 'none'], \
-		'Unreconized white-balance. For "color_space" pick 1 of: [auto, camera, average, none]'
+	assert wb in ['camera', 'auto', 'average', 'none'], \
+		'Unreconized white-balance. For "color_space" pick 1 of: [camera, auto, average, none]'
 	if wb == 'auto':
 		data['auto_wb'] = True
 		data['whitebalance'] = raw.daylight_whitebalance
@@ -70,7 +70,7 @@ def get_metadata(files, log, color_space, wb):
 		data['whitebalance'] = raw.camera_whitebalance
 		for f in files[1:]:
 			assert rawpy.imread(f).camera_whitebalance == data['whitebalance'], \
-				'Images have different white-balance values. For "wb" pick 1 of: [auto, average, none]'
+				'Images have different white-balance values. Perhaps you want to pass "average"'
 		data['whitebalance'] = np.array(data['whitebalance'])
 	elif wb == 'average':
 		# Use average wb across all images
@@ -128,7 +128,7 @@ def get_unsaturated(raw, bits, img=None):
 	return unsaturated
 
 
-def merge(files, demosaic_first=True, color_space='sRGB', wb='auto'):
+def merge(files, demosaic_first=True, color_space='sRGB', wb='camera'):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This
 	function merges in an online way and can handle a large number of inputs.
@@ -136,7 +136,7 @@ def merge(files, demosaic_first=True, color_space='sRGB', wb='auto'):
 	:files: filenames containing the inpt images
 	:demosaic_first: order of operations
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
-	:wb: White-balance values to use. Pick 1 of [auto, camera, average, none]
+	:wb: White-balance values to use. Pick 1 of [camera, auto, average, none]
 	:return: Merged FP32 HDR image
 	"""
 	log = logging.getLogger('merge')

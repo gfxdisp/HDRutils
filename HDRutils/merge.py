@@ -96,7 +96,9 @@ def get_metadata(files, log, color_space, wb):
 
 def get_unsaturated(raw, bits, img=None):
 	"""
-	Estimate a boolean mask to identify unsaturated pixels.
+	Estimate a boolean mask to identify unsaturated pixels. The boolean
+	mask returned is either single channel or 3-channel depending on whether
+	the RGB image is passed (using parameter "img")
 
 	:raw: Bayer image before demosaicing
 	:bits: Bit-depth of the RAW image
@@ -131,12 +133,13 @@ def get_unsaturated(raw, bits, img=None):
 def merge(files, demosaic_first=True, color_space='sRGB', wb='camera'):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This
-	function merges in an online way and can handle a large number of inputs.
+	is a wrapper function that extracts metadata and calls the appropriate
+	function.
 
 	:files: filenames containing the inpt images
 	:demosaic_first: order of operations
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
-	:wb: White-balance values to use. Pick 1 of [camera, auto, average, none]
+	:wb: White-balance values. Pick 1 of [camera, auto, average, none]
 	:return: Merged FP32 HDR image
 	"""
 	log = logging.getLogger('merge')
@@ -150,8 +153,17 @@ def merge(files, demosaic_first=True, color_space='sRGB', wb='camera'):
 
 def demosaic_merge(files, metadata, log):
 	"""
-	First postprocess using libraw and then merge RGB images
+	First postprocess using libraw and then merge RGB images. This function
+	merges in an online way and can handle a large number of inputs with
+	little memory.
+
+	:files: filenames containing the inpt images
+	:demosaic_first: order of operations
+	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
+	:wb: White-balance values. Pick 1 of [camera, auto, average, none]
+	:return: Merged FP32 HDR image
 	"""
+
 	log.info('Demosaicing before merging.')
 	# Check for saturation in shortest exposure
 	shortest_exposure = np.argmin(metadata['exp'] * metadata['gain'] * metadata['aperture'])
@@ -191,15 +203,23 @@ def demosaic_merge(files, metadata, log):
 
 def merge_demosaic(files, metadata, log, pattern='RGGB'):
 	"""
-	Merge RAW images before demosaicing.
+	Merge RAW images before demosaicing. This function merges in an online
+	way and can handle a large number of inputs with little memory.
+
+	:files: filenames containing the inpt images
+	:demosaic_first: order of operations
+	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
+	:wb: White-balance values. Pick 1 of [camera, auto, average, none]
+	:return: Merged FP32 HDR image
 	"""
-	import colour_demosaicing as cd
 
 	# Some sanity checks and logs related to colour-space and white-balnce
 	log.info('Merging before demosaicing.')
 	if metadata['colorspace'] != rawpy.ColorSpace.raw:
 		log.warning('Switching to RAW color-space since it is the only one ' \
 			'supported in the current mode.')
+	if metadata['auto_wb']:
+		log.warning('Auto white-balance not supported. Using daylight whitebalance')
 	wb = metadata['whitebalance']
 	if pattern == 'RGGB':
 		assert wb[1] == wb[3] or wb[3] == 0
@@ -239,6 +259,7 @@ def merge_demosaic(files, metadata, log, pattern='RGGB'):
 	# Libraw does not support 32-bit values. Use colour-demosaicing instead:
 	# https://colour-demosaicing.readthedocs.io/en/latest/manual.html
 	log.info('Running bilinear demosaicing')
+	import colour_demosaicing as cd
 	HDR = cd.demosaicing_CFA_Bayer_bilinear(HDR_bayer, pattern='RGGB')
 
 	# White-balance

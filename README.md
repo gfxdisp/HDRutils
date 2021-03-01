@@ -9,6 +9,11 @@ To download HDRUtils, either fork this github repo or simply use Pypi via pip:
 
     pip install HDRutils
 
+If you forked this repository, install the dependencies using pip:
+    
+    pip install -r requirements.txt
+
+## Additional dependency
 You will need the [FreeImage plugin](https://imageio.readthedocs.io/en/stable/format_exr-fi.html) for reading and writing OpenEXR images:
 
     imageio_download_bin freeimage

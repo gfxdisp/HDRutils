@@ -1,7 +1,7 @@
 # Based on the following article:
 # https://medium.com/@joel.barmettler/how-to-upload-your-python-package-to-pypi-65edc5fe9c56
 
-from distutils.core import setup
+from setuptools import setup
 setup(
   name = 'HDRutils',
   packages = ['HDRutils'],
@@ -11,7 +11,7 @@ setup(
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
   url = 'https://github.com/catchchaos/HDRutils-pip',
-  download_url = 'https://github.com/user/reponame/archive/v_01.tar.gz',
+  download_url = 'https://github.com/catchchaos/HDRutils-pip/archive/v0.1-beta.tar.gz',
   keywords = ['HDR', 'Merging', 'Deghosting'],
   install_requires=[
           'numpy',

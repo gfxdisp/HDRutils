@@ -114,37 +114,22 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camer
 	"""
 	data = get_metadata(files, color_space, wb)
 
-	if align:
-		# TODO
-		raise NotImplementedError
+	if demosaic_first:
+		HDR = imread_demosaic_merge(files, data, align)
 	else:
-		if demosaic_first:
-			HDR = imread_demosaic_merge(files, data)
-		else:
-			HDR = imread_merge_demosaic(files, data)
-		return HDR
-
-	# import cv2
-	# imgs = [HDRutils.imread(f)/t for f, t in zip(files, data['exp'])]
-	# imgs = [cv2.resize(img, (0,0), fx=1/2, fy=1/2) for img in imgs] 
-	# # imgs = [((img/np.max(imgs))**(1/2.2)).astype(np.float32) for img in imgs]
-	# # return imgs
-	# # imgs = [HDRutils.imread(f) for f in files]
-	# if align:
-	# 	aligned = HDRutils.align(imgs, 1)
-	# 	return aligned
+		HDR = imread_merge_demosaic(files, data, align)
+	return HDR
 
 
-def imread_demosaic_merge(files, metadata):
+def imread_demosaic_merge(files, metadata, align):
 	"""
 	First postprocess using libraw and then merge RGB images. This function
 	merges in an online way and can handle a large number of inputs with
 	little memory.
 
 	:files: filenames containing the inpt images
-	:demosaic_first: order of operations
-	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
-	:wb: White-balance values. Pick 1 of [camera, auto, none]
+	:metadata: internally generated metadata dict
+	:align: perform homography based alignment before merging
 	:return: Merged FP32 HDR image
 	"""
 
@@ -153,11 +138,18 @@ def imread_demosaic_merge(files, metadata):
 	shortest_exposure = np.argmin(metadata['exp'] * metadata['gain'] * metadata['aperture'])
 	logger.info(f'Shortest exposure is {shortest_exposure}')
 
+	if align:
+		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
+							 * metadata['aperture'])[len(files)//2]
+		ref_img = HDRutils.imread(files[ref_idx], color_space=metadata['color_space'], wb=metadata['wb'])
+
 	num_saturated = 0
 	num, denom = np.zeros((2, metadata['h'], metadata['w'], 3))
 	for i, f in enumerate(tqdm.tqdm(files)):
 		raw = rawpy.imread(f)
 		img = HDRutils.io.imread_libraw(raw, color_space=metadata['color_space'], wb=metadata['wb'])
+		if align and i != ref_idx:
+			img = HDRutils.align(ref_img, img)
 
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
@@ -178,18 +170,20 @@ def imread_demosaic_merge(files, metadata):
 	return HDR
 
 
-def imread_merge_demosaic(files, metadata, pattern='RGGB'):
+def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 
 	:files: filenames containing the inpt images
-	:demosaic_first: order of operations
-	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
-	:wb: White-balance values. Pick 1 of [camera, auto, none]
+	:metadata: internally generated metadata dict
+	:align: perform homography based alignment before merging
+	:pattern: bayer pattern used in RAW images
 	:return: Merged FP32 HDR image
 	"""
 
+	if align:
+		raise NotImplementedError
 	# Some sanity checks and logs related to colour-space and white-balnce
 	logger.info('Merging before demosaicing.')
 	if metadata['color_space'] != 'raw':

@@ -1,3 +1,6 @@
+# Based on the following article:
+# https://medium.com/@joel.barmettler/how-to-upload-your-python-package-to-pypi-65edc5fe9c56
+
 from distutils.core import setup
 setup(
   name = 'HDRutils',
@@ -8,9 +11,9 @@ setup(
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
   url = 'https://github.com/catchchaos/HDRutils-pip',
-  download_url = 'https://github.com/user/reponame/archive/v_01.tar.gz', # TODO: https://medium.com/@joel.barmettler/how-to-upload-your-python-package-to-pypi-65edc5fe9c56
+  download_url = 'https://github.com/user/reponame/archive/v_01.tar.gz',
   keywords = ['HDR', 'Merging', 'Deghosting'],
-  install_requires=[            # I get to this in a second
+  install_requires=[
           'numpy',
           'imageio',
           'rawpy',
@@ -18,6 +21,7 @@ setup(
           'tqdm',
           'colour-demosaicing',
           'matplotlib',
+          'opencv_python',
       ],
   classifiers=[
     'Development Status :: 3 - Alpha',

@@ -26,19 +26,26 @@ def find_homography(kp1, kp2, matches):
 
 	return homography
 
-def align(imgs, ref):
+def align(ref, target, downsample=None):
 	"""
-	Align the images. Use feature matching and homography estimation to align
-	input images. This works well for camera motion when scene depth is small.
+	Align a pair of images. Use feature matching and homography estimation to
+	align. This works well for camera motion when scene depth is small.
 
-	:imgs: input image stack
-	:ref: index of reference image
-	:return: aligned images
+	:ref: input reference image
+	:target: target image that should be warped
+	:downsample: when working with large images, memory considerations might
+				 make it necessary to compute homography on downsampled images
+	:return: warped target image
 	"""
 	logger = logging.getLogger('align')
-	logger.info(f"Aligning images using homography. Reference provided: {ref}")
-	h, w = imgs[ref].shape[:2]
-	aligned = []
+	logger.info('Aligning images using homography')
+	h, w = ref.shape[:2]
+	if downsample:
+		assert downsample > 1
+		ref = cv2.resize(ref, (0, 0), fx=1/downsample, fy=1/downsample)
+		target_r = cv2.resize(target, (0, 0), fx=1/downsample, fy=1/downsample)
+	else:
+		target_r = target
 
 	logger.info('Using SIFT feature detector')
 	try:
@@ -47,24 +54,18 @@ def align(imgs, ref):
 		detector = cv2.SIFT_create()
 	bf = cv2.BFMatcher(crossCheck=True)
 
-	for i, img in enumerate(imgs):
-		if i == ref:
-			aligned.append(img)
-		else:
-			im1, im2 = encode(imgs[ref], img)
-			kp_ref, desc_ref = detector.detectAndCompute(im1, None)
-			kp, desc = detector.detectAndCompute(im2, None)
+	enc_ref, enc_target = encode(ref, target_r)
+	kp_ref, desc_ref = detector.detectAndCompute(enc_ref, None)
+	kp, desc = detector.detectAndCompute(enc_target, None)
 
-			matches = bf.match(desc, desc_ref)
-			logger.info(f'{len(matches)} matches found for image {i}')
-			matches = sorted(matches, key=lambda x:x.distance)[:100]
+	matches = bf.match(desc, desc_ref)
+	logger.info(f'{len(matches)} matches found, using top 100')
+	matches = sorted(matches, key=lambda x:x.distance)[:100]
 
-			# img = cv2.drawMatches((img//256).astype(np.uint8), kp, (imgs[ref]//256).astype(np.uint8), kp_ref, matches, None)
+	# img = cv2.drawMatches(enc_target, kp, enc_ref, kp_ref, matches, None)
 
-			H = find_homography(kp, kp_ref, matches)
-			logger.info(f'Estimated homography: {H}')
-			warped = cv2.warpPerspective(img, H, (w, h))
+	H = find_homography(kp, kp_ref, matches)
+	logger.info(f'Estimated homography: {H}')
+	warped = cv2.warpPerspective(target, H, (w, h))
 
-			aligned.append(warped)
-
-	return aligned
+	return warped

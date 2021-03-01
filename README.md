@@ -3,8 +3,6 @@
 Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images.
 
 ## Installation
-TODO: Not uploaded to pip yet.
-
 To download HDRUtils, either fork this github repo or simply use Pypi via pip:
 
     pip install HDRutils

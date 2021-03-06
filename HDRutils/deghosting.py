@@ -58,7 +58,15 @@ def align(ref, target, downsample=None):
 	kp_ref, desc_ref = detector.detectAndCompute(enc_ref, None)
 	kp, desc = detector.detectAndCompute(enc_target, None)
 
-	matches = bf.match(desc, desc_ref)
+	try:
+		matches = bf.match(desc, desc_ref)
+	except cv2.error as e:
+		# https://github.com/opencv/opencv/issues/5700
+		logger.warning('Too many keypoints detected. OpenCV can not match. Restricting '
+					   'to 100k keypoints per image.')
+		kp, desc = kp[:100000], desc[:100000]
+		kp_ref, desc_ref = kp_ref[:100000], desc_ref[:100000]
+		matches = bf.match(desc, desc_ref)
 	logger.info(f'{len(matches)} matches found, using top 100')
 	matches = sorted(matches, key=lambda x:x.distance)[:100]
 

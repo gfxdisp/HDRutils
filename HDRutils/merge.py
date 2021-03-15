@@ -8,13 +8,14 @@ import HDRutils
 
 logger = logging.getLogger(__name__)
 
-def get_metadata(files, color_space, wb):
+def get_metadata(files, color_space, wb, sat_percent):
 	"""
 	Get metadata from EXIF files and rawpy
 	
-	:files: filenames containing the inpt images
+	:files: Filenames containing the inpt images
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
 	:wb: White-balance to use. Pick 1 of [camera, auto, none]
+	:sat_percent: Saturation offset from reported white-point
 	:return: A dictonary containing all the metadata
 	"""
 
@@ -30,7 +31,7 @@ def get_metadata(files, color_space, wb):
 		elif 'Image ExposureTime' in tags:
 			data['exp'][i] = float(Fraction(tags['Image ExposureTime'].printable))
 		else:
-			raise Exception('Unable to read exposure time. Check EXIF data.')
+			raise Exception(f'Unable to read exposure time for {file}. Check EXIF data.')
 
 		if 'EXIF ISOSpeedRatings' in tags:
 			data['gain'][i] = float(tags['EXIF ISOSpeedRatings'].printable)/100
@@ -48,7 +49,8 @@ def get_metadata(files, color_space, wb):
 	raw = rawpy.imread(files[0])
 	data['h'], data['w'] = raw.postprocess(user_flip=0).shape[:2]
 	data['black_level'] = np.array(raw.black_level_per_channel)
-	data['saturation_point'] = raw.white_level - 128	# We see artifacts without this offset
+	# For some cameras, the provided white_level is incorrect
+	data['saturation_point'] = raw.white_level*sat_percent
 	data['color_space'] = color_space
 	data['wb'] = wb
 
@@ -64,7 +66,7 @@ def get_metadata(files, color_space, wb):
 	return data
 
 
-def get_unsaturated(raw, saturation_threshold, img=None):
+def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
 	"""
 	Estimate a boolean mask to identify unsaturated pixels. The boolean
 	mask returned is either single channel or 3-channel depending on whether
@@ -73,7 +75,8 @@ def get_unsaturated(raw, saturation_threshold, img=None):
 	:raw: Bayer image before demosaicing
 	:bits: Bit-depth of the RAW image
 	:img: RGB image after processing by libraw
-	:return: boolean unsaturated mask
+	:sat_percent: Saturation offset from reported white-point
+	:return: Boolean unsaturated mask
 	"""
 
 	unsaturated = np.logical_and.reduce((raw.raw_image_visible[0::2,0::2] < saturation_threshold,
@@ -92,44 +95,52 @@ def get_unsaturated(raw, saturation_threshold, img=None):
 		unsaturated = unsaturated4
 	else:
 		# The channel could also become saturated after white-balance
-		saturation_threshold = (2**16 - 128)
-		unsaturated4 = np.logical_and(unsaturated4, np.all(img <= saturation_threshold, axis=2))
+		saturation_threshold = (2**16 - 1) * sat_percent
+		unsaturated4 = np.logical_and(unsaturated4, np.all(img < saturation_threshold, axis=2))
 		unsaturated = np.repeat(unsaturated4[:,:,np.newaxis], 3, axis=-1)
 
 	return unsaturated
 
 
-def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camera'):
+def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camera',
+		  saturation_percent=0.98):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This
 	is a wrapper function that extracts metadata and calls the appropriate
 	function.
 
-	:files: filenames containing the inpt images
-	:align: align by estimation homography
-	:demosaic_first: order of operations
+	:files: Filenames containing the inpt images
+	:align: Align by estimation homography
+	:demosaic_first: Order of operations
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
 	:wb: White-balance values. Pick 1 of [camera, auto, none]
+	:saturation_percent: Saturation offset from reported white-point
 	:return: Merged FP32 HDR image
 	"""
-	data = get_metadata(files, color_space, wb)
+	data = get_metadata(files, color_space, wb, saturation_percent)
 
 	if demosaic_first:
-		HDR = imread_demosaic_merge(files, data, align)
+		HDR, sat = imread_demosaic_merge(files, data, align, saturation_percent)
 	else:
-		HDR = imread_merge_demosaic(files, data, align)
+		HDR, sat = imread_merge_demosaic(files, data, align)
+
+	if sat > 0:
+		logger.warning(f'{sat/(data["h"]*data["w"]):.3f}% of pixels (n={sat}) are saturated' \
+			'in the shortest exposure. The values for these pixels will be inaccurate.')
+
 	return HDR
 
 
-def imread_demosaic_merge(files, metadata, align):
+def imread_demosaic_merge(files, metadata, align, sat_percent):
 	"""
 	First postprocess using libraw and then merge RGB images. This function
 	merges in an online way and can handle a large number of inputs with
 	little memory.
 
-	:files: filenames containing the inpt images
-	:metadata: internally generated metadata dict
-	:align: perform homography based alignment before merging
+	:files: Filenames containing the inpt images
+	:metadata: Internally generated metadata dict
+	:align: Perform homography based alignment before merging
+	:sat_percent: Saturation offset from reported white-point
 	:return: Merged FP32 HDR image
 	"""
 
@@ -154,20 +165,18 @@ def imread_demosaic_merge(files, metadata, align):
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
 			unsaturated = np.ones_like(img, dtype=bool) 
-			num_sat = np.count_nonzero(np.logical_not(get_unsaturated(raw, metadata['saturation_point'], img=img))) / 3
+			num_sat = np.count_nonzero(np.logical_not(get_unsaturated(
+				raw, metadata['saturation_point'], img, sat_percent))) / 3
 		else:
-			unsaturated = get_unsaturated(raw, metadata['saturation_point'], img=img)
+			unsaturated = get_unsaturated(raw, metadata['saturation_point'],
+										  img, sat_percent)
 		X_times_t = img / metadata['gain'][i] / metadata['aperture'][i]
 		denom[unsaturated] += metadata['exp'][i]
 		num[unsaturated] += X_times_t[unsaturated]
 
 	HDR = (num / denom).astype(np.float32)
 
-	if num_sat > 0:
-		logger.warning(f'{num_sat/(metadata["h"]*metadata["w"]):.3f}% of pixels (n={num_sat}) are ' \
-			'saturated in the shortest exposure. The values for these pixels will be inaccurate.')
-
-	return HDR
+	return HDR, num_sat
 
 
 def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
@@ -175,10 +184,10 @@ def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 
-	:files: filenames containing the inpt images
-	:metadata: internally generated metadata dict
-	:align: perform homography based alignment before merging
-	:pattern: bayer pattern used in RAW images
+	:files: Filenames containing the inpt images
+	:metadata: Internally generated metadata dict
+	:align: Perform homography based alignment before merging
+	:pattern: Bayer pattern used in RAW images
 	:return: Merged FP32 HDR image
 	"""
 
@@ -221,7 +230,8 @@ def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
 			unsaturated = np.ones_like(raw, dtype=bool) 
-			num_sat = np.count_nonzero(np.logical_not(get_unsaturated(raw, metadata['saturation_point'])))
+			num_sat = np.count_nonzero(np.logical_not(get_unsaturated(
+				raw, metadata['saturation_point'])))
 		else:
 			unsaturated = get_unsaturated(raw, metadata['saturation_point'])
 		
@@ -246,4 +256,4 @@ def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 		logger.warning(f"{num_sat/(metadata['h']*metadata['w']):.3f}% of pixels (n={num_sat}) are \
 			saturated in the shortest exposure. The values for those pixels will be inaccurate.")
 
-	return HDR
+	return HDR, num_sat

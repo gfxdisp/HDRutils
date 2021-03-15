@@ -47,7 +47,10 @@ def imread(file, libraw=True, color_space='sRGB', wb='camera'):
 	:return: image as np array
 	"""
 	raw_ext = ('.dng', '.arw', '.cr2', '.nef')
-	if file.lower().endswith((raw_ext)):
+	ldr_ext = ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+	hdr_ext = ('.exr', '.hdr')
+
+	if file.lower().endswith(raw_ext):
 		# Raw formats may be optionally processed with libraw
 		raw = rawpy.imread(file)
 		if libraw:
@@ -55,7 +58,13 @@ def imread(file, libraw=True, color_space='sRGB', wb='camera'):
 		else:
 			return raw.raw_image_visible
 	else:
-		# For other formats, just use imageio
+		# Imagio imread should handle most formats
+		if file.lower().endswith(ldr_ext):
+			logger.info('LDR image file format provided')
+		elif file.lower().endswith(hdr_ext):
+			logger.info('HDR image file format provided')
+		else:
+			logger.warning('Unknown image file format. Reverting to imageio imread')
 		return io.imread(file)
 
 
@@ -67,8 +76,7 @@ def imwrite(file, img):
 	:img: HDR image to write; datatype should ideally be floating point image
 	"""
 	if img.dtype in (np.uint8, np.uint16):
-		logger.warning('It is very unlikely that the image is HDR since '
-			f'it is encoded using {img.dtype}')
+		logger.info(f'LDR image provided, it is encoded using {img.dtype}')
 		if file.endswith('.png'):
 			io.imwrite(file, img, format='PNG-FI')
 	elif img.dtype in (np.float32, np.float64, np.float128):
@@ -77,5 +85,5 @@ def imwrite(file, img):
 			# Imegio needs an additional flag to prevent clipping to (2**16 - 1)
 			io.imwrite(file, img, flags=0x0001)
 	else:
-		logger.warning('Non-standard extension/datatype. Reverting to imageio default')
+		logger.warning('Unknown extension/datatype. Reverting to imageio imwrite')
 		io.imwrite(file, img)

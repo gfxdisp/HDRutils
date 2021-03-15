@@ -5,13 +5,13 @@ from setuptools import setup
 setup(
   name = 'HDRutils',
   packages = ['HDRutils'],
-  version = '0.1',
+  version = '0.2',
   license='MIT',
   description = 'Utility functions for perfming basic operations on HDR images, including merging and deghosting',
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
   url = 'https://github.com/catchchaos/HDRutils-pip',
-  download_url = 'https://github.com/catchchaos/HDRutils-pip/archive/v0.1-beta.tar.gz',
+  download_url = 'https://github.com/catchchaos/HDRutils-pip/archive/v0.2.tar.gz',
   keywords = ['HDR', 'Merging', 'Deghosting'],
   install_requires=[
           'numpy',

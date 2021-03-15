@@ -38,7 +38,7 @@ def get_metadata(files, color_space, wb, sat_percent):
 		elif 'Image ISOSpeedRatings' in tags:
 			data['gain'][i] = float(tags['Image ISOSpeedRatings'].printable)/100
 		else:
-			raise Exception('Unable to read ISO. Check EXIF data.')
+			raise Exception(f'Unable to read ISO. Check EXIF data for {file}.')
 
 		# Aperture formula from https://www.omnicalculator.com/physics/aperture-area
 		focal_length = float(Fraction(tags['EXIF FocalLength'].printable))
@@ -103,7 +103,7 @@ def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
 
 
 def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camera',
-		  saturation_percent=0.98):
+		  saturation_percent=0.98, normalize=False):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This
 	is a wrapper function that extracts metadata and calls the appropriate
@@ -115,6 +115,7 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camer
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe]
 	:wb: White-balance values. Pick 1 of [camera, auto, none]
 	:saturation_percent: Saturation offset from reported white-point
+	:normalize: Ensure output pixels lie between 0 and 1
 	:return: Merged FP32 HDR image
 	"""
 	data = get_metadata(files, color_space, wb, saturation_percent)
@@ -128,6 +129,10 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camer
 		logger.warning(f'{sat/(data["h"]*data["w"]):.3f}% of pixels (n={sat}) are saturated' \
 			'in the shortest exposure. The values for these pixels will be inaccurate.')
 
+	if HDR.min() < 0:
+		logger.error('Negative pixels found. This should not happen.')
+	if normalize:
+		HDR = HDR / HDR.max()
 	return HDR
 
 

@@ -61,6 +61,9 @@ def imread(file, libraw=True, color_space='sRGB', wb='camera'):
 		# Imagio imread should handle most formats
 		if file.lower().endswith(ldr_ext):
 			logger.info('LDR image file format provided')
+			if file.lower().endswith('.png'):
+				# 16-bit pngs require an additional flag
+				return io.imread(file, format='PNG-FI')
 		elif file.lower().endswith(hdr_ext):
 			logger.info('HDR image file format provided')
 		else:
@@ -78,6 +81,7 @@ def imwrite(file, img):
 	if img.dtype in (np.uint8, np.uint16):
 		logger.info(f'LDR image provided, it is encoded using {img.dtype}')
 		if file.endswith('.png'):
+			# 16-bit pngs require an additional flag
 			io.imwrite(file, img, format='PNG-FI')
 	elif img.dtype in (np.float32, np.float64, np.float128):
 		img = img.astype(np.float32)

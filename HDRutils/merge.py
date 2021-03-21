@@ -130,7 +130,8 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camer
 			'in the shortest exposure. The values for these pixels will be inaccurate.')
 
 	if HDR.min() < 0:
-		logger.error('Negative pixels found. This should not happen.')
+		logger.info('Clipping negative pixels.')
+		HDR[HDR < 0] = 0
 	if normalize:
 		HDR = HDR / HDR.max()
 	return HDR

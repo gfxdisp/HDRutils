@@ -67,8 +67,13 @@ def align(ref, target, downsample=None):
 		kp, desc = kp[:100000], desc[:100000]
 		kp_ref, desc_ref = kp_ref[:100000], desc_ref[:100000]
 		matches = bf.match(desc, desc_ref)
-	logger.info(f'{len(matches)} matches found, using top 100')
 	matches = sorted(matches, key=lambda x:x.distance)[:100]
+
+	if len(matches) < 10:
+		logger.error('Not enough matches, homography alignment failed')
+		return target
+	else:
+		logger.info(f'{len(matches)} matches found, using top 100')
 
 	# img = cv2.drawMatches(enc_target, kp, enc_ref, kp_ref, matches, None)
 

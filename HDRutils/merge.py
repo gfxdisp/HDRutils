@@ -126,7 +126,7 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb='camer
 		HDR, sat = imread_merge_demosaic(files, data, align)
 
 	if sat > 0:
-		logger.warning(f'{sat/(data["h"]*data["w"]):.3f}% of pixels (n={sat}) are saturated' \
+		logger.warning(f'{sat/(data["h"]*data["w"]):.3f}% of pixels (n={sat}) are saturated ' \
 			'in the shortest exposure. The values for these pixels will be inaccurate.')
 
 	if HDR.min() < 0:
@@ -209,9 +209,10 @@ def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 		logger.warning('Auto white-balance not supported. Using daylight whitebalance')
 		wb = np.array(raw.daylight_whitebalance)
 	elif metadata['wb'] == 'camera':
-		logger.warning('Make sure that white-balance was not set to "auto" while ' \
-			'capturing the stack. Using white-balance of first image.')
+		logger.info('Using white-balance of first image.')
 		wb = np.array(raw.camera_whitebalance)
+	elif metadata['wb'] == 'none':
+		wb = np.ones(4)
 	else:
 		raise NotImplementedError
 
@@ -258,8 +259,5 @@ def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 
 	# White-balance
 	HDR = (HDR * wb[np.newaxis, np.newaxis, :]).astype(np.float32)
-	if num_sat > 0:
-		logger.warning(f"{num_sat/(metadata['h']*metadata['w']):.3f}% of pixels (n={num_sat}) are \
-			saturated in the shortest exposure. The values for those pixels will be inaccurate.")
 
 	return HDR, num_sat

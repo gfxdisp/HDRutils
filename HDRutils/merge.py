@@ -4,7 +4,8 @@ from fractions import Fraction
 import numpy as np
 import rawpy, exifread
 
-import HDRutils
+import HDRutils.io as io
+from HDRutils.deghosting import align
 
 logger = logging.getLogger(__name__)
 
@@ -72,10 +73,10 @@ def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
 	:return: Boolean unsaturated mask
 	"""
 
-	unsaturated = np.logical_and.reduce((raw.raw_image_visible[0::2,0::2] < saturation_threshold,
-										raw.raw_image_visible[1::2,0::2] < saturation_threshold,
-										raw.raw_image_visible[0::2,1::2] < saturation_threshold,
-										raw.raw_image_visible[1::2,1::2] < saturation_threshold))
+	unsaturated = np.logical_and.reduce((raw[0::2,0::2] < saturation_threshold,
+										raw[1::2,0::2] < saturation_threshold,
+										raw[0::2,1::2] < saturation_threshold,
+										raw[1::2,1::2] < saturation_threshold))
 
 	# A silly way to do 2x box-filter upsampling 
 	unsaturated4 = np.zeros([unsaturated.shape[0]*2, unsaturated.shape[1]*2], dtype=bool)
@@ -95,14 +96,14 @@ def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
 	return unsaturated
 
 
-def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb=[1, 1, 1],
+def merge(files, do_align=False, demosaic_first=True, color_space='sRGB', wb=[1, 1, 1],
 		  saturation_percent=0.98, normalize=False):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
 
 	:files: Filenames containing the inpt images
-	:align: Align by estimation homography
+	:do_align: Align by estimation homography
 	:demosaic_first: Order of operations
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe, XYZ]
 	:wb: White-balance values after merging.
@@ -113,9 +114,9 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb=[1, 1,
 	data = get_metadata(files, color_space, saturation_percent)
 
 	if demosaic_first:
-		HDR, num_sat = imread_demosaic_merge(files, data, align, saturation_percent)
+		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
 	else:
-		HDR, num_sat = imread_merge_demosaic(files, data, align)
+		HDR, num_sat = imread_merge_demosaic(files, data, do_align)
 
 	if num_sat > 0:
 		logger.warning(f'{num_sat/(data["h"]*data["w"]):.3f}% of pixels (n={num_sat}) are ' \
@@ -133,7 +134,7 @@ def merge(files, align=False, demosaic_first=True, color_space='sRGB', wb=[1, 1,
 	return HDR.astype(np.float32)
 
 
-def imread_demosaic_merge(files, metadata, align, sat_percent):
+def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	"""
 	First postprocess using libraw and then merge RGB images. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -145,26 +146,27 @@ def imread_demosaic_merge(files, metadata, align, sat_percent):
 	shortest_exposure = np.argmin(metadata['exp'] * metadata['gain'] * metadata['aperture'])
 	logger.info(f'Shortest exposure is {shortest_exposure}')
 
-	if align:
+	if do_align:
 		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
 							 * metadata['aperture'])[len(files)//2]
-		ref_img = HDRutils.imread(files[ref_idx], color_space=metadata['color_space'])
+		ref_img = io.imread(files[ref_idx], color_space=metadata['color_space'])
 
 	num_saturated = 0
 	num, denom = np.zeros((2, metadata['h'], metadata['w'], 3))
 	for i, f in enumerate(tqdm.tqdm(files)):
 		raw = rawpy.imread(f)
-		img = HDRutils.io.imread_libraw(raw, color_space=metadata['color_space'])
-		if align and i != ref_idx:
-			img = HDRutils.align(ref_img, img)
+		img = io.imread_libraw(raw, color_space=metadata['color_space'])
+		if do_align and i != ref_idx:
+			img = align(ref_img, img)
 
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
-			unsaturated = np.ones_like(img, dtype=bool) 
-			num_sat = np.count_nonzero(np.logical_not(get_unsaturated(
-				raw, metadata['saturation_point'], img, sat_percent))) / 3
+			unsaturated = np.ones_like(img, dtype=bool)
+			num_sat = np.count_nonzero(np.logical_not(
+				get_unsaturated(raw.raw_image_visible, metadata['saturation_point'],
+								img, sat_percent))) / 3
 		else:
-			unsaturated = get_unsaturated(raw, metadata['saturation_point'],
+			unsaturated = get_unsaturated(raw.raw_image_visible, metadata['saturation_point'],
 										  img, sat_percent)
 		X_times_t = img / metadata['gain'][i] / metadata['aperture'][i]
 		denom[unsaturated] += metadata['exp'][i]
@@ -175,13 +177,13 @@ def imread_demosaic_merge(files, metadata, align, sat_percent):
 	return HDR, num_sat
 
 
-def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
+def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 	"""
 
-	if align:
+	if do_align:
 		raise NotImplementedError
 
 	logger.info('Merging before demosaicing.')
@@ -220,16 +222,15 @@ def imread_merge_demosaic(files, metadata, align, pattern='RGGB'):
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2),
 						  (metadata['h']//2, metadata['w']//2))
 	for i, f in enumerate(tqdm.tqdm(files)):
-		raw = rawpy.imread(f)
-		img = raw.raw_image_visible.astype(np.float32)
+		img = io.imread(f, libraw=False).astype(np.float32)
 
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
-			unsaturated = np.ones_like(raw, dtype=bool) 
+			unsaturated = np.ones_like(img, dtype=bool)
 			num_sat = np.count_nonzero(np.logical_not(get_unsaturated(
-				raw, metadata['saturation_point'])))
+				img, metadata['saturation_point'])))
 		else:
-			unsaturated = get_unsaturated(raw, metadata['saturation_point'])
+			unsaturated = get_unsaturated(img, metadata['saturation_point'])
 		
 		# Subtract black level for linearity
 		img -= black_frame

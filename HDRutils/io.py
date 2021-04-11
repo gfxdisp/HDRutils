@@ -4,34 +4,25 @@ import imageio as io, rawpy
 
 logger = logging.getLogger(__name__)
 
-def imread_libraw(raw, color_space='sRGB', wb='camera'):
-	if color_space == 'sRGB':
+def imread_libraw(raw, color_space='srgb'):
+	wb = None
+	if color_space == 'srgb':
 		color_space = rawpy.ColorSpace.sRGB
 	elif color_space == 'raw':
 		color_space = rawpy.ColorSpace.raw
-	elif color_space == 'Adobe':
+		wb = (1, 1, 1, 1)
+	elif color_space == 'adobe':
 		color_space = rawpy.ColorSpace.Adobe
+	elif color_space == 'xyz':
+		color_space = rawpy.ColorSpace.XYZ
 	else:
 		raise Exception('Unknown color-space. Use sRGB, raw or Adobe.')
-
-	auto_wb = False
-	if wb == 'auto':
-		auto_wb = True
-		wb = raw.daylight_whitebalance
-	elif wb == 'camera':
-		wb = raw.camera_whitebalance
-	elif wb == 'none':
-		wb = np.ones(4)
-	else:
-		raise Exception('Unknown white-balance. Use auto, camera or none.')
 
 	# Different demosaicing algorithms can be used. See this link:
 	# https://letmaik.github.io/rawpy/api/enums.html#demosaicalgorithm
 	# user_flip set to 0 because otherwise we cannot align RAW and demosaiced pixel values
-	img = raw.postprocess(gamma=(1,1), no_auto_bright=True, output_bps=16,
-						  use_auto_wb=auto_wb, user_wb=tuple(wb),
-						  user_flip=0, output_color=color_space,
-						  highlight_mode=rawpy.HighlightMode.Clip)
+	img = raw.postprocess(gamma=(1,1), no_auto_bright=True, output_bps=16, user_wb=wb,
+						  user_flip=0, output_color=color_space)
 	return img
 
 
@@ -43,7 +34,6 @@ def imread(file, libraw=True, color_space='sRGB', wb='camera'):
 		   RAW file. Supported RAW formats are (.dng, .arw, .cr2, .nef)
 	:libraw: boolean flag indicating that RAW image should be processed by libraw
 	:color_space: output color_space (libraw argument)
-	:wb: white-balance setting (libraw argument)
 	:return: image as np array
 	"""
 	raw_ext = ('.dng', '.arw', '.cr2', '.nef')
@@ -54,7 +44,7 @@ def imread(file, libraw=True, color_space='sRGB', wb='camera'):
 		# Raw formats may be optionally processed with libraw
 		raw = rawpy.imread(file)
 		if libraw:
-			return imread_libraw(raw, color_space, wb)
+			return imread_libraw(raw, color_space)
 		else:
 			return raw.raw_image_visible
 	else:

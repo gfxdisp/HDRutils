@@ -26,13 +26,14 @@ def find_homography(kp1, kp2, matches):
 
 	return homography
 
-def align(ref, target, downsample=None):
+def align(ref, target, warped, downsample=None):
 	"""
 	Align a pair of images. Use feature matching and homography estimation to
 	align. This works well for camera motion when scene depth is small.
 
 	:ref: input reference image
-	:target: target image that should be warped
+	:target: target image to estimate homography
+	:warped: image to be warped
 	:downsample: when working with large images, memory considerations might
 				 make it necessary to compute homography on downsampled images
 	:return: warped target image
@@ -58,27 +59,36 @@ def align(ref, target, downsample=None):
 	kp_ref, desc_ref = detector.detectAndCompute(enc_ref, None)
 	kp, desc = detector.detectAndCompute(enc_target, None)
 
-	try:
-		matches = bf.match(desc, desc_ref)
-	except cv2.error as e:
+	if len(kp) > 100000:
 		# https://github.com/opencv/opencv/issues/5700
-		logger.warning('Too many keypoints detected. OpenCV can not match. Restricting '
-					   'to 100k keypoints per image.')
+		logger.info('Too many keypoints detected. Restricting to 100k keypoints per image.')
 		kp, desc = kp[:100000], desc[:100000]
 		kp_ref, desc_ref = kp_ref[:100000], desc_ref[:100000]
-		matches = bf.match(desc, desc_ref)
-	matches = sorted(matches, key=lambda x:x.distance)[:100]
+	matches = bf.match(desc, desc_ref)
 
 	if len(matches) < 10:
 		logger.error('Not enough matches, homography alignment failed')
-		return target
+		return warped
 	else:
 		logger.info(f'{len(matches)} matches found, using top 100')
+	matches = sorted(matches, key=lambda x:x.distance)[:100]
 
 	# img = cv2.drawMatches(enc_target, kp, enc_ref, kp_ref, matches, None)
 
 	H = find_homography(kp, kp_ref, matches)
+	if H.max() > 1000:
+		logger.warning('Large value detected in homography. Estimation may have failed.')
 	logger.info(f'Estimated homography: {H}')
-	warped = cv2.warpPerspective(target, H, (w, h))
+	if len(warped.shape) == 2:
+		# Bayer image
+		logger.info('Warping bayer image')
+		h, w = h//2, w//2
+		warped[::2,::2] = cv2.warpPerspective(warped[::2,::2], H, (w, h))
+		warped[::2,1::2] = cv2.warpPerspective(warped[::2,1::2], H, (w, h))
+		warped[1::2,::2] = cv2.warpPerspective(warped[1::2,::2], H, (w, h))
+		warped[1::2,1::2] = cv2.warpPerspective(warped[1::2,1::2], H, (w, h))
+	else:
+		logger.info('Warping RGB image')
+		warped = cv2.warpPerspective(warped, H, (w, h))
 
 	return warped

@@ -6,6 +6,7 @@ logger = logging.getLogger(__name__)
 
 def imread_libraw(raw, color_space='srgb'):
 	wb = None
+	color_space = color_space.lower()
 	if color_space == 'srgb':
 		color_space = rawpy.ColorSpace.sRGB
 	elif color_space == 'raw':
@@ -26,7 +27,7 @@ def imread_libraw(raw, color_space='srgb'):
 	return img
 
 
-def imread(file, libraw=True, color_space='sRGB', wb='camera'):
+def imread(file, libraw=True, color_space='srgb', wb='camera'):
 	"""
 	Wrapper for io.imread() or rawpy.imread() depending on extension provided.
 

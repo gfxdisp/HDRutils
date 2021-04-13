@@ -149,7 +149,9 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	if do_align:
 		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
 							 * metadata['aperture'])[len(files)//2]
-		ref_img = io.imread(files[ref_idx], color_space=metadata['color_space'])
+		ref_img = io.imread(files[ref_idx]) / metadata['exp'][ref_idx] \
+											/ metadata['gain'][ref_idx] \
+											/ metadata['aperture'][ref_idx]
 
 	num_saturated = 0
 	num, denom = np.zeros((2, metadata['h'], metadata['w'], 3))
@@ -157,7 +159,10 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 		raw = rawpy.imread(f)
 		img = io.imread_libraw(raw, color_space=metadata['color_space'])
 		if do_align and i != ref_idx:
-			img = align(ref_img, img)
+			scaled_img = img / metadata['exp'][i] \
+							 / metadata['gain'][i] \
+							 / metadata['aperture'][i]
+			img = align(ref_img, scaled_img, img)
 
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
@@ -184,7 +189,11 @@ def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
 	"""
 
 	if do_align:
-		raise NotImplementedError
+		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
+							 * metadata['aperture'])[len(files)//2]
+		ref_img = io.imread(files[ref_idx]) / metadata['exp'][ref_idx] \
+											/ metadata['gain'][ref_idx] \
+											/ metadata['aperture'][ref_idx]
 
 	logger.info('Merging before demosaicing.')
 	raw = rawpy.imread(files[0])
@@ -223,6 +232,11 @@ def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
 						  (metadata['h']//2, metadata['w']//2))
 	for i, f in enumerate(tqdm.tqdm(files)):
 		img = io.imread(f, libraw=False).astype(np.float32)
+		if do_align and i != ref_idx:
+			scaled_img = io.imread(f).astype(np.float32) / metadata['exp'][i] \
+														 / metadata['gain'][i] \
+														 / metadata['aperture'][i]
+			img = align(ref_img, scaled_img, img)
 
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:

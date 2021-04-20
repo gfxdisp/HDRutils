@@ -7,12 +7,12 @@ setup(
   packages = ['HDRutils'],
   version = '0.4',
   license='MIT',
-  description = 'Utility functions for perfming basic operations on HDR images, including ' \
+  description = 'Utility functions for performing basic operations on HDR images, including ' \
                 'merging and deghosting',
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
-  url = 'https://github.com/catchchaos/HDRutils-pip',
-  download_url = 'https://github.com/catchchaos/HDRutils-pip/archive/v0.4.tar.gz',
+  url = 'https://github.com/gfxdisp/HDRutils-pip',
+  download_url = 'https://github.com/gfxdisp/HDRutils-pip/archive/v0.4.tar.gz',
   keywords = ['HDR', 'Merging', 'Deghosting'],
   install_requires=[
           'numpy',

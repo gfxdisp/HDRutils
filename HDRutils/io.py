@@ -69,16 +69,22 @@ def imwrite(file, img):
 	:file: output filename with correct extension
 	:img: HDR image to write; datatype should ideally be floating point image
 	"""
+	written = False
 	if img.dtype in (np.uint8, np.uint16):
 		logger.info(f'LDR image provided, it is encoded using {img.dtype}')
 		if file.endswith('.png'):
 			# 16-bit pngs require an additional flag
 			io.imwrite(file, img, format='PNG-FI')
+			written = True
 	elif img.dtype in (np.float32, np.float64, np.float128):
-		img = img.astype(np.float32)
 		if file.endswith(('.exr', '.hdr')):
 			# Imegio needs an additional flag to prevent clipping to (2**16 - 1)
-			io.imwrite(file, img, flags=0x0001)
-	else:
+			io.imwrite(file, img.astype(np.float32), flags=0x0001)
+			written = True
+	elif img.dtype == np.float16:
+		if file.endswith(('.exr', '.hdr')):
+			io.imwrite(file, img.astype(np.float32))
+			written = True
+	if not written:
 		logger.warning('Unknown extension/datatype. Reverting to imageio imwrite')
 		io.imwrite(file, img)

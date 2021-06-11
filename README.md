@@ -46,6 +46,15 @@ HDRutils.imwrite('merged.exr', HDR_img)
 
 The default function processes each image individually using [libraw](https://www.libraw.org/) and then merges the RGB images. This behaviour can be overriden to merge RAW bayer image by setting the flag `demosaic_first=False`.
 
+### Merge RAW bayer frames from non-RAW formats
+If your camera provides RAW frames in a non-standard format, you can still merge them in the camera color-space without libraw processing
+
+```python
+files = ['file1.png', 'file2.png', 'file3.png']     # PNG bayer input files
+HDR_img = HDRutils.merge(files, demosaic_first=False, color_space='raw')
+HDRutils.imwrite('merged.exr', HDR_img)
+```
+
 ### Deghosting
 TODO
 

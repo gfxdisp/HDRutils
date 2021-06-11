@@ -3,54 +3,86 @@ from fractions import Fraction
 
 import numpy as np
 import rawpy, exifread
+import colour_demosaicing as cd
 
 import HDRutils.io as io
 from HDRutils.deghosting import align
 
 logger = logging.getLogger(__name__)
 
-def get_metadata(files, color_space, sat_percent):
+def get_metadata(files, color_space, sat_percent, black_level, exp, gain, aperture):
 	"""
-	Get metadata from EXIF files and rawpy
+	Get metadata from EXIF files and rawpy. If the image file contains no metadata, exposure
+	time, gain and aperture need to supplied explicitly.
 	
 	:return: A dictonary containing all the metadata
 	"""
 
 	# Read exposure time, gain and aperture from EXIF data
 	data = dict()
-	data['exp'], data['gain'], data['aperture'] = np.empty((3, len(files)))
+	N = len(files)
 
-	for i, file in enumerate(files):
-		with open(file, 'rb') as f:
-			tags = exifread.process_file(f)
-		if 'EXIF ExposureTime' in tags:
-			data['exp'][i] = np.float32(Fraction(tags['EXIF ExposureTime'].printable))
-		elif 'Image ExposureTime' in tags:
-			data['exp'][i] = float(Fraction(tags['Image ExposureTime'].printable))
-		else:
-			raise Exception(f'Unable to read exposure time for {file}. Check EXIF data.')
+	try:
+		data['exp'], data['gain'], data['aperture'] = np.empty((3, N))
+		for i, file in enumerate(files):
+			with open(file, 'rb') as f:
+				tags = exifread.process_file(f)
+			if 'EXIF ExposureTime' in tags:
+				data['exp'][i] = np.float32(Fraction(tags['EXIF ExposureTime'].printable))
+			elif 'Image ExposureTime' in tags:
+				data['exp'][i] = float(Fraction(tags['Image ExposureTime'].printable))
+			else:
+				raise Exception(f'Unable to read exposure time for {file}. Check EXIF data.')
 
-		if 'EXIF ISOSpeedRatings' in tags:
-			data['gain'][i] = float(tags['EXIF ISOSpeedRatings'].printable)/100
-		elif 'Image ISOSpeedRatings' in tags:
-			data['gain'][i] = float(tags['Image ISOSpeedRatings'].printable)/100
-		else:
-			raise Exception(f'Unable to read ISO. Check EXIF data for {file}.')
+			if 'EXIF ISOSpeedRatings' in tags:
+				data['gain'][i] = float(tags['EXIF ISOSpeedRatings'].printable)/100
+			elif 'Image ISOSpeedRatings' in tags:
+				data['gain'][i] = float(tags['Image ISOSpeedRatings'].printable)/100
+			else:
+				raise Exception(f'Unable to read ISO. Check EXIF data for {file}.')
 
-		# Aperture formula from https://www.omnicalculator.com/physics/aperture-area
-		focal_length = float(Fraction(tags['EXIF FocalLength'].printable))
-		f_number = float(Fraction(tags['EXIF FNumber'].printable))
-		data['aperture'][i] = np.pi * (focal_length / 2 / f_number)**2
+			# Aperture formula from https://www.omnicalculator.com/physics/aperture-area
+			focal_length = float(Fraction(tags['EXIF FocalLength'].printable))
+			f_number = float(Fraction(tags['EXIF FNumber'].printable))
+			data['aperture'][i] = np.pi * (focal_length / 2 / f_number)**2
+	except Exception:
+		# Manually populate metadata for non-RAW formats
+		assert exp is not None, 'Unable to read metada from file, please supply manually'
+		data['exp'] = np.array(exp)
+		data['gain'] = np.ones(N) if gain is None else np.array(gain)
+		data['aperture'] = np.ones(N) if aperture is None else np.array(aperture)
+		assert len(exp) == N and len(data['gain']) == N and len(data['aperture']) == N, \
+			'Mismatch in dimensions of metadata supplied'
 
-	# Get remaining data from rawpy
-	raw = rawpy.imread(files[0])
-	data['h'], data['w'] = raw.postprocess(user_flip=0).shape[:2]
-	data['black_level'] = np.array(raw.black_level_per_channel)
-	# For some cameras, the provided white_level is incorrect
-	data['saturation_point'] = raw.white_level*sat_percent
+	try:
+		# Get remaining data from rawpy
+		raw = rawpy.imread(files[0])
+		data['raw_format'] = True
+		data['h'], data['w'] = raw.postprocess(user_flip=0).shape[:2]
+		data['black_level'] = np.array(raw.black_level_per_channel)
+		# For some cameras, the provided white_level is incorrect
+		data['saturation_point'] = raw.white_level*sat_percent
+	except rawpy._rawpy.LibRawFileUnsupportedError:
+		data['raw_format'] = False
+		longest_exposure = np.argmax(data['exp'] * data['gain'] * data['aperture'])
+		img = io.imread(files[longest_exposure])
+		assert len(img.shape) == 2, 'Provided files should not be demosaiced'
+		data['h'], data['w'] = img.shape
+		if img.dtype == np.float32:
+			data['saturation_point'] = img.max()
+		elif img.dtype == np.uint16:
+			data['saturation_point'] = 2**16 - 1
+		elif img.dtype == np.uint8:
+			data['saturation_point'] = 2**8 - 1
+		shortest_exposure = np.argmin(data['exp'] * data['gain'] * data['aperture'])
+		img = io.imread(files[shortest_exposure])
+		data['black_level'] = np.array([black_level]*4)
+		if np.abs(img.min() - black_level) > data['saturation_point'] * 0.01:
+			logger.warning(f'Using black level {black_level}. Double check this with camera docs.')
+
 	data['color_space'] = color_space.lower()
 
-	logger.info(f"Stack contains {len(files)} images of size: {data['h']}x{data['w']}")
+	logger.info(f"Stack contains {N} images of size: {data['h']}x{data['w']}")
 	logger.info(f"Exp: {data['exp']}")
 	logger.info(f"Gain: {data['gain']}")
 	logger.info(f"aperture: {data['aperture']}")
@@ -96,8 +128,9 @@ def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
 	return unsaturated
 
 
-def merge(files, do_align=False, demosaic_first=True, color_space='sRGB', wb=[1, 1, 1],
-		  saturation_percent=0.98, normalize=False):
+def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
+		  wb=[1, 1, 1], saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
+		  exp=None, gain=None, aperture=None):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -106,17 +139,22 @@ def merge(files, do_align=False, demosaic_first=True, color_space='sRGB', wb=[1,
 	:do_align: Align by estimation homography
 	:demosaic_first: Order of operations
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe, XYZ]
+	:normalize: Output pixels lie between 0 and 1
 	:wb: White-balance values after merging.
 	:saturation_percent: Saturation offset from reported white-point
-	:normalize: Output pixels lie between 0 and 1
+	:black_level: Camera's black level
+	:bayer_patter: Color filter array pattern of the camera
+	:exp: Exposure time (in seconds) required when metadata is not present
+	:gain: Camera gain (ISO/100) required when metadata is not present
+	:aperture: Aperture required when metadata is not present
 	:return: Merged FP32 HDR image
 	"""
-	data = get_metadata(files, color_space, saturation_percent)
+	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
 	else:
-		HDR, num_sat = imread_merge_demosaic(files, data, do_align)
+		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern)
 
 	if num_sat > 0:
 		logger.warning(f'{num_sat/(data["h"]*data["w"]):.3f}% of pixels (n={num_sat}) are ' \
@@ -140,6 +178,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	way and can handle a large number of inputs with little memory.
 	"""
 
+	assert metadata['raw_format'], 'Libraw unsupported, use merge(..., demosaic_first=False)'
 	logger.info('Demosaicing before merging.')
 	
 	# Check for saturation in shortest exposure
@@ -182,7 +221,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	return HDR, num_sat
 
 
-def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
+def imread_merge_demosaic(files, metadata, do_align, pattern):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -191,18 +230,23 @@ def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
 	if do_align:
 		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
 							 * metadata['aperture'])[len(files)//2]
-		ref_img = io.imread(files[ref_idx]) / metadata['exp'][ref_idx] \
-											/ metadata['gain'][ref_idx] \
-											/ metadata['aperture'][ref_idx]
+		ref_img = io.imread(files[ref_idx]).astype(np.float32)
+		if not metadata['raw_format']:
+			ref_img = cd.demosaicing_CFA_Bayer_bilinear(ref_img, pattern=pattern)
+		ref_img = ref_img / metadata['exp'][ref_idx] \
+						  / metadata['gain'][ref_idx] \
+						  / metadata['aperture'][ref_idx]
 
 	logger.info('Merging before demosaicing.')
-	raw = rawpy.imread(files[0])
-	
+
 	# More transforms available here:
 	# http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
 	if metadata['color_space'] == 'raw':
 		color_mat = np.eye(3)
 	else:
+		assert metadata['raw_format'], \
+			'Only RAW color_space supported. Use merge(..., color_space=\'raw\')'
+		raw = rawpy.imread(files[0])
 		assert (raw.rgb_xyz_matrix[-1] == 0).all()
 		native2xyz = np.linalg.inv(raw.rgb_xyz_matrix[:-1])
 
@@ -233,10 +277,13 @@ def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
 	for i, f in enumerate(tqdm.tqdm(files)):
 		img = io.imread(f, libraw=False).astype(np.float32)
 		if do_align and i != ref_idx:
-			scaled_img = io.imread(f).astype(np.float32) / metadata['exp'][i] \
-														 / metadata['gain'][i] \
-														 / metadata['aperture'][i]
-			img = align(ref_img, scaled_img, img)
+			i_img = io.imread(f).astype(np.float32)
+			if metadata['raw_format']:
+				i_img = cd.demosaicing_CFA_Bayer_bilinear(i_img, pattern=pattern)
+			i_img = i_img / metadata['exp'][i] \
+						  / metadata['gain'][i] \
+						  / metadata['aperture'][i]
+			img = align(ref_img, i_img, img)
 
 		# Ignore saturated pixels in all but shortest exposure
 		if i == shortest_exposure:
@@ -258,7 +305,6 @@ def imread_merge_demosaic(files, metadata, do_align, pattern='RGGB'):
 	# Libraw does not support 32-bit values. Use colour-demosaicing instead:
 	# https://colour-demosaicing.readthedocs.io/en/latest/manual.html
 	logger.info('Running bilinear demosaicing')
-	import colour_demosaicing as cd
 	HDR = cd.demosaicing_CFA_Bayer_bilinear(HDR_bayer, pattern=pattern)
 
 	# Convert to output color-space

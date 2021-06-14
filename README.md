@@ -64,9 +64,9 @@ If you find this package useful, please cite
     @inproceedings{hanji2020noise,
         author="Hanji, Param and Zhong, Fangcheng and Mantiuk, Rafa{\l} K.",
         title="Noise-Aware Merging of High Dynamic Range Image Stacks Without Camera Calibration",
-        booktitle="Proceedings of the European Conference on Computer Vision (ECCV) Workshops",
+        booktitle="Advances in Image Manipulation (ECCV workshop)",
         year="2020",
-        publisher="Springer International Publishing",
+        publisher="Springer",
         pages="376--391",
         url={https://doi.org/10.1007/978-3-030-67070-2\_23}
     }

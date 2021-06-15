@@ -1,4 +1,4 @@
-# HDRutils-pip
+# HDRutils
 
 Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images.
 

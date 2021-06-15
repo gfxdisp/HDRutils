@@ -3,11 +3,11 @@
 Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images.
 
 ## Installation
-To download HDRUtils, either fork this github repo or simply use Pypi via pip:
+To download HDRUtils, either clone this github repo or simply use Pypi via pip:
 
     pip install HDRutils
 
-If you forked this repository, install the dependencies using pip:
+If you cloned this repository, install the dependencies using pip:
     
     pip install -r requirements.txt
 
@@ -55,8 +55,8 @@ HDR_img = HDRutils.merge(files, demosaic_first=False, color_space='raw')
 HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
-### Deghosting
-TODO
+### Alignment
+While merging, some hosting artifacts an be removed by setting `align=True`. This attempts homography alignment and corrects camera motion for still scenes.
 
 ## Citation
 If you find this package useful, please cite

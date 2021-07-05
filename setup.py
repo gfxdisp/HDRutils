@@ -5,15 +5,15 @@ from setuptools import setup
 setup(
   name = 'HDRutils',
   packages = ['HDRutils'],
-  version = '0.4',
+  version = '0.5',
   license='MIT',
   description = 'Utility functions for performing basic operations on HDR images, including ' \
                 'merging and deghosting',
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
-  url = 'https://github.com/gfxdisp/HDRutils-pip',
-  download_url = 'https://github.com/gfxdisp/HDRutils-pip/archive/v0.4.tar.gz',
-  keywords = ['HDR', 'Merging', 'Deghosting'],
+  url = 'https://github.com/gfxdisp/HDRutils',
+  download_url = 'https://github.com/gfxdisp/HDRutils/archive/v0.5.tar.gz',
+  keywords = ['HDR', 'Merging', 'Deghosting', 'simulation'],
   install_requires=[
           'numpy',
           'imageio',
@@ -32,5 +32,7 @@ setup(
     'Programming Language :: Python :: 3',      #Specify which pyhton versions that you want to support
     'Programming Language :: Python :: 3.6',
     'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
   ],
 )

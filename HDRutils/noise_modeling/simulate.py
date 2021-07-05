@@ -47,7 +47,7 @@ class NormalNoise(NoiseModel):
 	"""
 	def __init__(self):
 		import json
-		with open('darktable.json') as f:
+		with open(os.path.join(os.path.dirname(__file__), 'darktable.json')) as f:
 			self.data = json.load(f)['noiseprofiles']
 		self.makes = []
 		for make in self.data:

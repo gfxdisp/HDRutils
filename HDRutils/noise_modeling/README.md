@@ -1,5 +1,5 @@
 # Noise simulatations
-We demonstrate how to use a simple noise model to generate sythetic captures by providing a ground truth HDR image, along with exposure time (in seconds) and gain (ISO 100 corresponds to gain 1). For best results, the input HDR image shuld not be normalized or transformed to a different (non-native) colorspace.
+We demonstrate how to use a simple noise model to generate sythetic captures by providing a ground truth HDR image, along with exposure time (in seconds) and gain (ISO 100 corresponds to gain 1). For best results, the input HDR image should not be normalized or transformed to a different (non-native) colorspace.
 
 ## Darktable cameras
 Simulate using a parameters from a large open-source database linked with the Darktable database. The detailed noise model can be found [here](https://www.darktable.org/2012/12/profiling-sensor-and-photon-noise/).

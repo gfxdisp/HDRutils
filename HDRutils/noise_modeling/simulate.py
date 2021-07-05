@@ -46,7 +46,7 @@ class NormalNoise(NoiseModel):
 	https://www.darktable.org/2012/12/profiling-sensor-and-photon-noise/
 	"""
 	def __init__(self):
-		import json
+		import json, os
 		with open(os.path.join(os.path.dirname(__file__), 'darktable.json')) as f:
 			self.data = json.load(f)['noiseprofiles']
 		self.makes = []

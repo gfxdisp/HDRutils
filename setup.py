@@ -5,6 +5,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'HDRutils',
   packages = find_packages(),
+  include_package_data=True,
   version = '0.7',
   license='MIT',
   description = 'Utility functions for performing basic operations on HDR images, including ' \

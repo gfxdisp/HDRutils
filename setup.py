@@ -1,10 +1,10 @@
 # Based on the following article:
 # https://medium.com/@joel.barmettler/how-to-upload-your-python-package-to-pypi-65edc5fe9c56
 
-from setuptools import setup
+from setuptools import setup, find_packages
 setup(
   name = 'HDRutils',
-  packages = ['HDRutils'],
+  packages = find_packages(),
   version = '0.5',
   license='MIT',
   description = 'Utility functions for performing basic operations on HDR images, including ' \

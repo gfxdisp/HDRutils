@@ -27,7 +27,7 @@ img = HDRutils.imread(hdr_file)
 preset = 'SonyA7r1'
 exp_time, iso = 1, 100
 
-model = HDRutils.NormalNoise(preset)
+model = HDRutils.PoissonNormalNoise(preset)
 noisy_img = model.simulate(img, exp_time, iso)
 ```
 

@@ -27,7 +27,7 @@ class PoissonNormalNoise(NoiseModel):
 		cam['k'] = np.array(cam['k'])
 		return cam
 
-	def simulate(self, img, iso, exp):
+	def simulate(self, img, exp, iso):
 		# Scale image according to match camera bits
 		scaling_factor = img.max() /  (2**self.cam['bits'] - 1)
 		img = img / scaling_factor
@@ -40,13 +40,12 @@ class PoissonNormalNoise(NoiseModel):
 		return (img + noise) * scaling_factor
 
 
-class NormalNoiseModel(NoiseModel):
+class NormalNoise(NoiseModel):
 	"""
 	Normal approximation used by Dartable database
 	https://www.darktable.org/2012/12/profiling-sensor-and-photon-noise/
 	"""
 	def __init__(self):
-		super(NormalNoiseModel, self).__init__()
 		import json
 		with open('darktable.json') as f:
 			self.data = json.load(f)['noiseprofiles']
@@ -77,7 +76,7 @@ class NormalNoiseModel(NoiseModel):
 						return a, b, iso/100
 		logger.error(f'Incorrect make ({make_str}), model ({model_str}) and iso ({iso})')
 
-	def simulate(self, img, make_str, model_str, iso, exp):
+	def simulate(self, img, make_str, model_str, exp, iso):
 		# Darktable parameters are for normalized images
 		scaling_factor = img.max()
 		img = img / scaling_factor

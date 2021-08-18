@@ -12,8 +12,6 @@ import HDRutils.io as io
 
 logger = logging.getLogger(__name__)
 
-def test():
-	print('Hello world')
 
 def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp=None, gain=None,
 				 aperture=None):
@@ -71,6 +69,7 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 		data['raw_format'] = False
 		longest_exposure = np.argmax(data['exp'] * data['gain'] * data['aperture'])
 		img = io.imread(files[longest_exposure])
+		data['dtype'] = img.dtype
 		assert len(img.shape) == 2, 'Provided files should not be demosaiced'
 		data['h'], data['w'] = img.shape
 		if img.dtype == np.float32:
@@ -98,7 +97,7 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 	return data
 
 
-def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
+def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_threshold_img=None):
 	"""
 	Estimate a boolean mask to identify unsaturated pixels. The mask returned is either single
 	channel or 3-channel depending on whether the RGB image is passed (using parameter "img")
@@ -109,27 +108,97 @@ def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
 	:sat_percent: Saturation offset from reported white-point
 	:return: Boolean unsaturated mask
 	"""
-	unsaturated = np.logical_and.reduce((raw[0::2,0::2] < saturation_threshold,
-										raw[1::2,0::2] < saturation_threshold,
-										raw[0::2,1::2] < saturation_threshold,
-										raw[1::2,1::2] < saturation_threshold))
+	if raw is not None:
+		unsaturated = np.logical_and.reduce((raw[0::2,0::2] < saturation_threshold,
+											 raw[1::2,0::2] < saturation_threshold,
+											 raw[0::2,1::2] < saturation_threshold,
+											 raw[1::2,1::2] < saturation_threshold))
 
-	# A silly way to do 2x box-filter upsampling 
-	unsaturated4 = np.zeros([unsaturated.shape[0]*2, unsaturated.shape[1]*2], dtype=bool)
-	unsaturated4[0::2,0::2] = unsaturated
-	unsaturated4[1::2,0::2] = unsaturated
-	unsaturated4[0::2,1::2] = unsaturated
-	unsaturated4[1::2,1::2] = unsaturated
+		# A silly way to do 2x box-filter upsampling 
+		unsaturated4 = np.zeros([unsaturated.shape[0]*2, unsaturated.shape[1]*2], dtype=bool)
+		unsaturated4[0::2,0::2] = unsaturated
+		unsaturated4[1::2,0::2] = unsaturated
+		unsaturated4[0::2,1::2] = unsaturated
+		unsaturated4[1::2,1::2] = unsaturated
 
-	if img is None:
-		unsaturated = unsaturated4
+		if img is None:
+			return unsaturated4
+
+	assert img is not None, 'Neither RAW nor RGB image is provided'
+	# The channel could become saturated after white-balance
+	unsaturated_all = np.all(img < saturation_threshold_img, axis=2)
+
+	if raw is None:
+		unsaturated = np.repeat(unsaturated_all[:,:,np.newaxis], 3, axis=-1)
 	else:
-		# The channel could also become saturated after white-balance
-		saturation_threshold = (2**16 - 1) * sat_percent
-		unsaturated4 = np.logical_and(unsaturated4, np.all(img < saturation_threshold, axis=2))
+		unsaturated4 = np.logical_and(unsaturated4, unsaturated_all)
 		unsaturated = np.repeat(unsaturated4[:,:,np.newaxis], 3, axis=-1)
 
 	return unsaturated
+
+
+def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percentile=90):
+	"""
+	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
+	
+	:files: Image filenames
+	:gains: Internal camera metadata dictionary
+	:sat_percent: Saturation offset from reported white-point
+	:noise_floor: All pixels smaller than this will be ignored
+	:percentile: Use a small percentage of all the pixels for the best estimation
+	:return: Corrected exposure times
+	"""
+	Y = np.array([io.imread(f, libraw=False) for f in files], dtype=np.float32)
+	if metadata['raw_format']:
+		black_frame = np.tile(metadata['black_level'].reshape(2, 2),
+							  (metadata['h']//2, metadata['w']//2))
+		unsaturated = [get_unsaturated(img, metadata['saturation_point']) for img in Y]
+	else:
+		black_frame = 0
+		sat_point = sat_percent * (2**(8*metadata['dtype']).itemsize - 1)
+		unsaturated = [get_unsaturated(img=img, saturation_threshold_img=sat_point) for img in Y]
+
+	# Mask out saturated and noisy pixels
+	above_noise_floor = Y >= black_frame + noise_floor
+	mask = np.logical_and(unsaturated, above_noise_floor).all(axis=0)
+	threshold = np.percentile(Y[-1][mask], percentile)
+	mask = np.logical_and(mask, Y[-1] > threshold)
+	L = np.log(np.stack([(y - black_frame)[mask] / (t * a) \
+						 for y, t, a in zip(Y, metadata['gain'], metadata['aperture'])]))
+	num_exp, num_pix = L.shape
+
+	# Construct sparse linear system O.E = M
+	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
+	rows = np.float32(np.arange(0, (num_exp - 1)*num_pix, 0.5))
+	cols, data = np.zeros((2, 2*(num_exp - 1)*num_pix), dtype=np.float32)
+	for i in range(0, 2*(num_exp - 1)*num_pix, num_pix*2):
+		c = i // (num_pix*2)
+		cols[i:(i+num_pix*2):2] = c
+		cols[(i+1):(i+num_pix*2):2] = c + 1
+		# # Weights don't seem to make a difference
+		# W = np.sqrt(1/(np.log(1+np.sqrt(1/np.exp(L[c])))**2 + \
+		# 			   np.log(1+np.sqrt(1/np.exp(L[c + 1])))**2))
+		# data[i:(i+num_pix*2):2] = W
+		# data[(i+1):(i+num_pix*2):2] = -W
+	data[::2] = 1
+	data[1::2] = -1
+
+	O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
+	M = np.empty((num_exp - 1)*num_pix, dtype=np.float32)
+	for i in range(0, (num_exp - 1)*num_pix, num_pix):
+		c = i // num_pix
+		# # Weights don't seem to make a difference
+		# W = np.sqrt(1/(np.log(1+np.sqrt(1/np.exp(L[c])))**2 + \
+		# 			   np.log(1+np.sqrt(1/np.exp(L[c + 1])))**2))
+		# M[i:(i+num_pix)] = (L[c] - L[c + 1]) * W
+		M[i:(i+num_pix)] = (L[c] - L[c + 1])
+
+	# Solve the system and get linearise
+	logger.info('Solving the sparse linear system')
+	exp = lsqr(O, M)[0]
+	exp = np.exp(exp - exp.min()) * metadata['exp'].min()
+	logger.warning(f"Exposure times in EXIF: {metadata['exp']}, estimated exposures: {exp}")
+	return exp
 
 
 def encode(im1, im2):

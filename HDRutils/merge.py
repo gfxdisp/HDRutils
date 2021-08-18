@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=[1, 1, 1], saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
-		  exp=None, gain=None, aperture=None):
+		  exp=None, gain=None, aperture=None, estimate_exp=False):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -29,11 +29,12 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:exp: Exposure time (in seconds) required when metadata is not present
 	:gain: Camera gain (ISO/100) required when metadata is not present
 	:aperture: Aperture required when metadata is not present
+	:estimate_exp: Estimate exposure times by solving a linear system
 	:return: Merged FP32 HDR image
 	"""
 	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
-	if exp is not None:
-		data['exp'] = exp
+	if estimate_exp:
+		data['exp'] = estimate_exposures(files, data)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
@@ -80,6 +81,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	for i, f in enumerate(tqdm.tqdm(files)):
 		raw = rawpy.imread(f)
 		img = io.imread_libraw(raw, color_space=metadata['color_space'])
+		saturation_point_img = sat_percent * (2**(8*img.dtype.itemsize) - 1)
 		if do_align and i != ref_idx:
 			scaled_img = img / metadata['exp'][i] \
 							 / metadata['gain'][i] \
@@ -91,10 +93,10 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 			unsaturated = np.ones_like(img, dtype=bool)
 			num_sat = np.count_nonzero(np.logical_not(
 				get_unsaturated(raw.raw_image_visible, metadata['saturation_point'],
-								img, sat_percent))) / 3
+								img, saturation_point_img))) / 3
 		else:
 			unsaturated = get_unsaturated(raw.raw_image_visible, metadata['saturation_point'],
-										  img, sat_percent)
+										  img, saturation_point_img)
 		X_times_t = img / metadata['gain'][i] / metadata['aperture'][i]
 		denom[unsaturated] += metadata['exp'][i]
 		num[unsaturated] += X_times_t[unsaturated]

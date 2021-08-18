@@ -7,11 +7,11 @@ Simulate using a parameters from a large open-source database linked with the Da
 ```python
 hdr_file = 'example.exr'
 img = HDRutils.imread(hdr_file)
-make, model = 'Canon', 'EOS-1Ds'
+camera_make, camera_model = 'Canon', 'EOS-1Ds'
 exp_time, iso = 1, 100
 
 model = HDRutils.NormalNoise()
-noisy_img = model.simulate(img, make, model, exp_time, iso)
+noisy_img = model.simulate(img, camera_make, camera_model, exp_time, iso)
 ```
 
 ## Cameras calibrated in Cambridge

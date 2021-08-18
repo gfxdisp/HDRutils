@@ -1,131 +1,13 @@
-import logging, os, tqdm
-from fractions import Fraction
+import logging, tqdm
 
 import numpy as np
-import rawpy, exifread
+import rawpy
 import colour_demosaicing as cd
 
 import HDRutils.io as io
-from HDRutils.deghosting import align
+from HDRutils.utils import *
 
 logger = logging.getLogger(__name__)
-
-def get_metadata(files, color_space, sat_percent, black_level, exp, gain, aperture):
-	"""
-	Get metadata from EXIF files and rawpy. If the image file contains no metadata, exposure
-	time, gain and aperture need to supplied explicitly.
-	
-	:return: A dictonary containing all the metadata
-	"""
-
-	# Read exposure time, gain and aperture from EXIF data
-	data = dict()
-	N = len(files)
-
-	try:
-		data['exp'], data['gain'], data['aperture'] = np.empty((3, N))
-		for i, file in enumerate(files):
-			with open(file, 'rb') as f:
-				tags = exifread.process_file(f)
-			if 'EXIF ExposureTime' in tags:
-				data['exp'][i] = np.float32(Fraction(tags['EXIF ExposureTime'].printable))
-			elif 'Image ExposureTime' in tags:
-				data['exp'][i] = float(Fraction(tags['Image ExposureTime'].printable))
-			else:
-				raise Exception(f'Unable to read exposure time for {file}. Check EXIF data.')
-
-			if 'EXIF ISOSpeedRatings' in tags:
-				data['gain'][i] = float(tags['EXIF ISOSpeedRatings'].printable)/100
-			elif 'Image ISOSpeedRatings' in tags:
-				data['gain'][i] = float(tags['Image ISOSpeedRatings'].printable)/100
-			else:
-				raise Exception(f'Unable to read ISO. Check EXIF data for {file}.')
-
-			# Aperture formula from https://www.omnicalculator.com/physics/aperture-area
-			focal_length = float(Fraction(tags['EXIF FocalLength'].printable))
-			f_number = float(Fraction(tags['EXIF FNumber'].printable))
-			data['aperture'][i] = np.pi * (focal_length / 2 / f_number)**2
-	except Exception:
-		# Manually populate metadata for non-RAW formats
-		assert exp is not None, 'Unable to read metada from file, please supply manually'
-		data['exp'] = np.array(exp)
-		data['gain'] = np.ones(N) if gain is None else np.array(gain)
-		data['aperture'] = np.ones(N) if aperture is None else np.array(aperture)
-		assert len(exp) == N and len(data['gain']) == N and len(data['aperture']) == N, \
-			'Mismatch in dimensions of metadata supplied'
-
-	try:
-		# Get remaining data from rawpy
-		raw = rawpy.imread(files[0])
-		data['raw_format'] = True
-		data['h'], data['w'] = raw.postprocess(user_flip=0).shape[:2]
-		data['black_level'] = np.array(raw.black_level_per_channel)
-		# For some cameras, the provided white_level is incorrect
-		data['saturation_point'] = raw.white_level*sat_percent
-	except rawpy._rawpy.LibRawFileUnsupportedError:
-		data['raw_format'] = False
-		longest_exposure = np.argmax(data['exp'] * data['gain'] * data['aperture'])
-		img = io.imread(files[longest_exposure])
-		assert len(img.shape) == 2, 'Provided files should not be demosaiced'
-		data['h'], data['w'] = img.shape
-		if img.dtype == np.float32:
-			data['saturation_point'] = img.max()
-		elif img.dtype == np.uint16:
-			data['saturation_point'] = 2**16 - 1
-		elif img.dtype == np.uint8:
-			data['saturation_point'] = 2**8 - 1
-		shortest_exposure = np.argmin(data['exp'] * data['gain'] * data['aperture'])
-		img = io.imread(files[shortest_exposure])
-		data['black_level'] = np.array([black_level]*4)
-		if np.abs(img.min() - black_level) > data['saturation_point'] * 0.01:
-			logger.warning(f'Using black level {black_level}. Double check this with camera docs.')
-
-	data['color_space'] = color_space.lower()
-
-	logger.info(f"Stack contains {N} images of size: {data['h']}x{data['w']}")
-	logger.info(f"Exp: {data['exp']}")
-	logger.info(f"Gain: {data['gain']}")
-	logger.info(f"aperture: {data['aperture']}")
-	logger.info(f"Black-level: {data['black_level']}")
-	logger.info(f"Saturation point: {data['saturation_point']}")
-	logger.info(f"Color-space: {color_space}")
-
-	return data
-
-
-def get_unsaturated(raw, saturation_threshold, img=None, sat_percent=None):
-	"""
-	Estimate a boolean mask to identify unsaturated pixels. The mask returned is either single
-	channel or 3-channel depending on whether the RGB image is passed (using parameter "img")
-
-	:raw: Bayer image before demosaicing
-	:bits: Bit-depth of the RAW image
-	:img: RGB image after processing by libraw
-	:sat_percent: Saturation offset from reported white-point
-	:return: Boolean unsaturated mask
-	"""
-
-	unsaturated = np.logical_and.reduce((raw[0::2,0::2] < saturation_threshold,
-										raw[1::2,0::2] < saturation_threshold,
-										raw[0::2,1::2] < saturation_threshold,
-										raw[1::2,1::2] < saturation_threshold))
-
-	# A silly way to do 2x box-filter upsampling 
-	unsaturated4 = np.zeros([unsaturated.shape[0]*2, unsaturated.shape[1]*2], dtype=bool)
-	unsaturated4[0::2,0::2] = unsaturated
-	unsaturated4[1::2,0::2] = unsaturated
-	unsaturated4[0::2,1::2] = unsaturated
-	unsaturated4[1::2,1::2] = unsaturated
-
-	if img is None:
-		unsaturated = unsaturated4
-	else:
-		# The channel could also become saturated after white-balance
-		saturation_threshold = (2**16 - 1) * sat_percent
-		unsaturated4 = np.logical_and(unsaturated4, np.all(img < saturation_threshold, axis=2))
-		unsaturated = np.repeat(unsaturated4[:,:,np.newaxis], 3, axis=-1)
-
-	return unsaturated
 
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
@@ -150,6 +32,8 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:return: Merged FP32 HDR image
 	"""
 	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
+	if exp is not None:
+		data['exp'] = exp
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
@@ -177,7 +61,6 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	First postprocess using libraw and then merge RGB images. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 	"""
-
 	assert metadata['raw_format'], 'Libraw unsupported, use merge(..., demosaic_first=False)'
 	logger.info('Demosaicing before merging.')
 	
@@ -226,7 +109,6 @@ def imread_merge_demosaic(files, metadata, do_align, pattern):
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 	"""
-
 	if do_align:
 		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
 							 * metadata['aperture'])[len(files)//2]

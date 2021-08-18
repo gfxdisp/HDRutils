@@ -3,13 +3,15 @@
 Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images.
 
 ## Installation
-To download HDRUtils, either clone this github repo or simply use Pypi via pip:
+To download HDRUtils, use Pypi via pip:
 
     pip install HDRutils
 
-If you cloned this repository, install the dependencies using pip:
+If you prefer cloning this repository, install the dependencies using pip:
     
-    pip install -r requirements.txt
+    pip clone https://github.com/gfxdisp/HDRutils.git
+    cd HDRutils
+    pip install -e .
 
 ## Additional dependency
 You will need the [FreeImage plugin](https://imageio.readthedocs.io/en/stable/format_exr-fi.html) for reading and writing OpenEXR images:

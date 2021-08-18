@@ -1,6 +1,6 @@
 # HDRutils
 
-Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images.
+Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images. You can find a separate Readme describing some functinos for noise simulations [here](HDRutils/noise_modeling).
 
 ## Installation
 To download HDRUtils, use Pypi via pip:

@@ -28,14 +28,13 @@ class PoissonNormalNoise(NoiseModel):
 		return cam
 
 	def simulate(self, phi, exp, iso, disable_static_noise=False):
-		# Scale image according to match camera bits
+		t = float(exp)
+		g = float(iso) / 100
 		img = phi * t * g
 		cam_max = 2**self.cam['bits'] - 1
 		if img.max() > cam_max:
 			logger.warning(f'Max pixel is {img.max()} before adding noise. Values > {cam_max} '
 						   f'are likely to be clipped due to saturation')
-		t = float(exp)
-		g = float(iso) / 100
 
 		# Sample noise (Eq. 2)
 		var = img * g * self.cam['k'][None,None,:]

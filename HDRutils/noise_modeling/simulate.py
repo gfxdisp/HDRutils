@@ -27,17 +27,18 @@ class PoissonNormalNoise(NoiseModel):
 		cam['k'] = np.array(cam['k'])
 		return cam
 
-	def simulate(self, img, exp, iso):
+	def simulate(self, phi, exp, iso, disable_static_noise=False):
 		# Scale image according to match camera bits
-		scaling_factor = img.max() /  (2**self.cam['bits'] - 1)
-		img = img / scaling_factor
+		scaling_factor = phi.max() / (2**self.cam['bits'] - 1)
+		phi = phi / scaling_factor
 		t = float(exp)
 		g = float(iso) / 100
 
-		var = (img/t + (self.cam['std_read']/t)**2 + \
-			  (self.cam['std_adc'] / t / g)**2) * self.cam['k'][None,None,:]**2
+		var = (phi/t) * self.cam['k'][None,None,:]**2
+		if not disable_static_noise:
+			var += ((self.cam['std_read']/t)**2 + (self.cam['std_adc'] / t / g)**2) * self.cam['k'][None,None,:]**2
 		noise = np.random.normal(scale=np.sqrt(var))
-		return (img + noise) * scaling_factor
+		return (phi + noise) * scaling_factor
 
 
 class NormalNoise(NoiseModel):
@@ -76,15 +77,18 @@ class NormalNoise(NoiseModel):
 						return a, b, iso/100
 		logger.error(f'Incorrect make ({make_str}), model ({model_str}) and iso ({iso})')
 
-	def simulate(self, img, make_str, model_str, exp, iso):
-		# Darktable parameters are for normalized images
-		scaling_factor = img.max()
-		img = img / scaling_factor
-
+	def simulate(self, phi, make_str, model_str, exp, iso, disable_static_noise=False):
 		a, b, g = self.get_profile(make_str, model_str, iso)
 		t = float(exp)
 
+		# Darktable parameters are for normalized images
+		scaling_factor = phi.max()
+		phi = phi / scaling_factor
+
 		# Rescale image
-		var = (img*a[None,None,:] + b[None,None,:]) / (t*g)**2
-		noise = np.random.normal(scale=np.sqrt(var))
-		return (img + noise) * scaling_factor
+		var = phi*t*g**2*a[None,None,:]
+		if not disable_static_noise:
+			var += b[None,None,:]
+		logger.info(f'Var statistics: {var.min()}, {var.mean()}, {var.max()}')
+		img = np.random.normal(loc=phi*t*g, scale=np.sqrt(var))
+		return img * scaling_factor

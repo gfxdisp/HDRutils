@@ -2,16 +2,16 @@ import os, logging, sys
 sys.path.append('..')
 import HDRutils, numpy as np
 
-logging.basicConfig(level=logging.INFO)
+# logging.basicConfig(level=logging.INFO)
 
 file = 'image_stack/clean_forest.jpg'
 clean = HDRutils.imread(file)
-clean = (clean / 255)**(2.2) * 255
+clean = (clean / 255)**(2.2)
 # G = np.logspace(np.log10(2**(-8)), 0 , 1000)
 # clean = np.stack([(np.stack([G]*1000))]*3, axis=-1)
 
 camera_make, camera_model = 'Canon', 'PowerShot S100'
-exp_times, iso = np.arange(0.5, 2.5, 0.5) / 32, 3200
+exp_times, iso = np.arange(0.5, 2.5, 0.5), 100
 model = HDRutils.NormalNoise()
 
 for i,e in enumerate(exp_times):

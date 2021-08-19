@@ -1,6 +1,6 @@
 # HDRutils
 
-Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images.
+Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images. You can find a separate Readme describing some functinos for noise simulations [here](HDRutils/noise_modeling).
 
 ## Installation
 To download HDRUtils, use Pypi via pip:
@@ -13,7 +13,7 @@ If you prefer cloning this repository, install the dependencies using pip:
     cd HDRutils
     pip install -e .
 
-## Additional dependency
+### Additional dependency
 You will need the [FreeImage plugin](https://imageio.readthedocs.io/en/stable/format_exr-fi.html) for reading and writing OpenEXR images:
 
     imageio_download_bin freeimage
@@ -58,7 +58,10 @@ HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
 ### Alignment
-While merging, some hosting artifacts an be removed by setting `align=True`. This attempts homography alignment and corrects camera motion for still scenes.
+While merging, some hosting artifacts an be removed by setting `HDRutils(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes.
+
+### Estimate exposure times
+The exposure times reported in EXIF camera metadata may be inaccurate. You can then solve a linear least squares problem to estimate most suitable exposure times by setting `HDRutils.merge(..., estimate_exp=True)`. The default behaviour is to use the brightest 10% of the pixels for estimation.
 
 ## Citation
 If you find this package useful, please cite

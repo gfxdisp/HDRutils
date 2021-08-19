@@ -137,7 +137,7 @@ def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_th
 	return unsaturated
 
 
-def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percentile=90):
+def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percentile=90, invert_gamma=False):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
@@ -163,9 +163,14 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	mask = np.logical_and(unsaturated, above_noise_floor).all(axis=0)
 	threshold = np.percentile(Y[-1][mask], percentile)
 	mask = np.logical_and(mask, Y[-1] > threshold)
-	L = np.log(np.stack([(y - black_frame)[mask] / (t * a) \
+	Y = np.maximum(Y - black_frame, 0)
+	if invert_gamma:
+		max_value = np.iinfo(metadata['dtype']).max
+		Y = (Y / max_value)**(invert_gamma) * max_value
+	L = np.log(np.stack([y[mask] / (t * a) \
 						 for y, t, a in zip(Y, metadata['gain'], metadata['aperture'])]))
 	num_exp, num_pix = L.shape
+	assert num_pix > 0, 'No valid pixels found. Use closer exposure times'
 
 	# Construct sparse linear system O.E = M
 	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')

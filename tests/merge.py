@@ -5,7 +5,8 @@ logging.basicConfig(level=logging.INFO)
 
 cs = 'sRGB'
 root = 'image_stack'
-files = [os.path.join(root, f) for f in os.listdir(root)][:-1]
+files = [os.path.join(root, f) for f in os.listdir(root) \
+		 if f.startswith('noisy')]
 
 HDR = HDRutils.merge(files, do_align=True)
 HDRutils.imwrite('merged.hdr', HDR)

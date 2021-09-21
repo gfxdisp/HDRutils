@@ -6,14 +6,14 @@ setup(
   name = 'HDRutils',
   packages = find_packages(),
   include_package_data=True,
-  version = '0.7',
+  version = '0.8',
   license='MIT',
   description = 'Utility functions for performing basic operations on HDR images, including ' \
                 'merging and deghosting',
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
   url = 'https://github.com/gfxdisp/HDRutils',
-  download_url = 'https://github.com/gfxdisp/HDRutils/archive/v0.7.tar.gz',
+  download_url = 'https://github.com/gfxdisp/HDRutils/archive/v0.8.tar.gz',
   keywords = ['HDR', 'Merging', 'Deghosting', 'simulation'],
   install_requires=[
           'numpy',

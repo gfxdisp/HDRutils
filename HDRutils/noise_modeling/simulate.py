@@ -82,7 +82,7 @@ class NormalNoise(NoiseModel):
 						return a, b, iso/100
 		logger.error(f'Incorrect make ({make_str}), model ({model_str}) and iso ({iso})')
 
-	def simulate(self, phi, make_str, model_str, exp, iso, disable_static_noise=False, bits=8):
+	def simulate(self, phi, make_str, model_str, exp, iso, disable_static_noise=False, bits=8, black_level=0):
 		assert bits <= 16
 		a, b, g = self.get_profile(make_str, model_str, iso)
 		t = float(exp)
@@ -102,5 +102,5 @@ class NormalNoise(NoiseModel):
 
 		dtype = np.uint8 if bits <= 8 else np.uint16
 		max_value = 2**bits - 1
-		quantized = ((img + noise).clip(0, 1)*max_value).astype(dtype)
+		quantized = ((img + noise + black_level/max_value).clip(0, 1)*max_value).astype(dtype)
 		return quantized

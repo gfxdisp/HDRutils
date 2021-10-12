@@ -14,6 +14,7 @@ class PoissonNormalNoise(NoiseModel):
 	def __init__(self, camera_name):
 		self.cam = self.from_preset(camera_name)
 
+
 	def from_preset(self, camera_name):
 		"""Cameras measured in Cambridge using calibration target"""
 		Camera = {
@@ -26,6 +27,7 @@ class PoissonNormalNoise(NoiseModel):
 		cam = Camera[camera_name]
 		cam['k'] = np.array(cam['k'])
 		return cam
+
 
 	def simulate(self, phi, exp, iso, disable_static_noise=False):
 		t = float(exp)
@@ -51,17 +53,24 @@ class NormalNoise(NoiseModel):
 	Normal approximation used by Dartable database
 	https://www.darktable.org/2012/12/profiling-sensor-and-photon-noise/
 	"""
-	def __init__(self):
+	def __init__(self, make=None, model=None, iso=None, bits=14):
 		import json, os
 		with open(os.path.join(os.path.dirname(__file__), 'darktable.json')) as f:
 			self.data = json.load(f)['noiseprofiles']
 		self.makes = []
-		for make in self.data:
-			self.makes.append(make['maker'])
-	
-	def get_profile(self, make_str, model_str, iso):
+		for m in self.data:
+			self.makes.append(m['maker'])
+		logger.info('Camera database successfully loaded')
+		if make and model and iso:
+			self.set_profile(make, model, iso)
+		else:
+			logger.warning('Camera make, model and iso are not specified')
+		self.bits = bits
+
+
+	def set_profile(self, make_str, model_str, iso):
 		"""
-		Obtain camera parameters from camera presets
+		Set camera parameters from camera presets
 
 		:make_str: Pick 1 from ['Canon', 'Fujifilm', 'Minolta', 'Nikon', 'Olympus', 'Panasonic',
 				   'Pentax', 'Samsung', 'Sony', 'LGE', 'Ricoh', 'Leica', 'YI TECHNOLOGY']
@@ -77,27 +86,36 @@ class NormalNoise(NoiseModel):
 				model = m
 				for i in model['profiles']:
 					if iso == i['iso']:
-						a = np.array(i['a'])
-						b = np.array(i['b'])
-						return a, b, iso/100
+						self.a = np.array(i['a'])
+						self.b = np.array(i['b'])
+						self.g = iso/100
+						return
 		logger.error(f'Incorrect make ({make_str}), model ({model_str}) and iso ({iso})')
 
-	def simulate(self, phi, make_str, model_str, exp, iso, disable_static_noise=False, bits=8, black_level=0):
-		assert bits <= 16
-		a, b, g = self.get_profile(make_str, model_str, iso)
-		t = float(exp)
+
+	def var(self, img, make=None, model=None, iso=None, disable_static_noise=False):
+		if make and model and iso:
+			self.set_profile(make, model, iso)
 
 		# Darktable parameters are for normalized images
-		img = phi * t * g
 		if img.max() > 1:
 			logger.warning(f'Max pixel is {img.max()} before adding noise. Values > 1 are '
 						   f'likely to be clipped due to saturation')
 
 		# Sample noise
-		var = img*a[None,None,:]
+		var = img*self.a[None,None,:]
 		if not disable_static_noise:
-			var += b[None,None,:]
-		logger.info(f'Var statistics: {var.min()}, {var.mean()}, {var.max()}')
+			var += self.b[None,None,:]
+		logger.info(f'Variance statistics: {var.min()}, {var.mean()}, {var.max()}')
+		return var
+
+
+	def simulate(self, phi, exp, iso=None, make=None, model=None, disable_static_noise=False, bits=8, black_level=0):
+		assert bits <= 16
+		t = float(exp)
+
+		img = phi * t * self.g
+		var = self.var(img, make, model, iso, disable_static_noise)
 		noise = np.random.normal(scale=np.sqrt(var))
 
 		dtype = np.uint8 if bits <= 8 else np.uint16

@@ -1,4 +1,5 @@
 import logging, os, tqdm
+from numpy.core.numeric import ones_like
 from fractions import Fraction
 import exifread
 
@@ -137,7 +138,8 @@ def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_th
 	return unsaturated
 
 
-def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percentile=90, invert_gamma=False):
+def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percentile=None,
+					   invert_gamma=False, cam=None):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
@@ -145,63 +147,80 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	:gains: Internal camera metadata dictionary
 	:sat_percent: Saturation offset from reported white-point
 	:noise_floor: All pixels smaller than this will be ignored
-	:percentile: Use a small percentage of all the pixels for the best estimation
+	:percentile: Use a small percentage of all the pixels for the faster estimation
+	:invert_gamma: If the images are gamma correct invert to work with linear values
+	:cam: Camera noise parameters for better estimation
 	:return: Corrected exposure times
 	"""
-	Y = np.array([io.imread(f, libraw=False) for f in files], dtype=np.float32)
+	Y = np.array([io.imread(f, libraw=False) for f in sorted(files)], dtype=np.float32)
 	if metadata['raw_format']:
 		black_frame = np.tile(metadata['black_level'].reshape(2, 2),
 							  (metadata['h']//2, metadata['w']//2))
 		unsaturated = [get_unsaturated(img, metadata['saturation_point']) for img in Y]
 	else:
-		black_frame = 0
+		black_frame = metadata['black_level']
 		sat_point = sat_percent * (2**(8*metadata['dtype']).itemsize - 1)
 		unsaturated = [get_unsaturated(img=img, saturation_threshold_img=sat_point) for img in Y]
 
 	# Mask out saturated and noisy pixels
+	# TODO: noise floor and saturation ceiling using noise model
+	# y2 - ay - b = 0
 	above_noise_floor = Y >= black_frame + noise_floor
 	mask = np.logical_and(unsaturated, above_noise_floor).all(axis=0)
-	threshold = np.percentile(Y[-1][mask], percentile)
-	mask = np.logical_and(mask, Y[-1] > threshold)
+
+	# Solve the linear system on a fraction of the pixels when time/memory is limited
+	if percentile:
+		threshold = np.percentile(Y[-1][mask], percentile)
+		mask = np.logical_and(mask, Y[-1] > threshold)
 	Y = np.maximum(Y - black_frame, 0)
 	if invert_gamma:
 		max_value = np.iinfo(metadata['dtype']).max
 		Y = (Y / max_value)**(invert_gamma) * max_value
-	L = np.log(np.stack([y[mask] / (t * a) \
-						 for y, t, a in zip(Y, metadata['gain'], metadata['aperture'])]))
+
+	# TODO: Handle imamge stacks with varying gain and aperture
+	assert len(set(metadata['gain'])) == 1 and len(set(metadata['aperture'])) == 1
+
+	# If noise model is provided, store variances
+	L = np.log(np.stack([y[mask] for y in Y]))
 	num_exp, num_pix = L.shape
+	Y[:,np.logical_not(mask)] = 'nan'
+	scaled_var = np.stack([(cam.var(y)/y**2)[mask] for y in Y/(2**(cam.bits) - 1)]) \
+				 if cam else np.ones(num_exp)/np.sqrt(2)
+	# print(scaled_var.shape, L.shape, Y.shape)
+
 	assert num_pix > 0, 'No valid pixels found. Use closer exposure times'
 
-	# Construct sparse linear system O.E = M
+	# Construct sparse linear system O.e = M
 	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
-	rows = np.float32(np.arange(0, (num_exp - 1)*num_pix, 0.5))
-	cols, data = np.zeros((2, 2*(num_exp - 1)*num_pix), dtype=np.float32)
-	for i in range(0, 2*(num_exp - 1)*num_pix, num_pix*2):
-		c = i // (num_pix*2)
-		cols[i:(i+num_pix*2):2] = c
-		cols[(i+1):(i+num_pix*2):2] = c + 1
-		# # Weights don't seem to make a difference
-		# W = np.sqrt(1/(np.log(1+np.sqrt(1/np.exp(L[c])))**2 + \
-		# 			   np.log(1+np.sqrt(1/np.exp(L[c + 1])))**2))
-		# data[i:(i+num_pix*2):2] = W
-		# data[(i+1):(i+num_pix*2):2] = -W
-	data[::2] = 1
+	rows = np.arange(0, (num_exp - 1)*num_pix, 0.5)
+	# rows = np.arange(0, num_exp*(num_exp - 1)//2*num_pix, 0.5)
+	cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
 	data[1::2] = -1
+	M = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
+	# M = np.empty((num_exp - 1)*num_exp//2*num_pix, dtype=np.float32)
+	cnt = 0
+	for i in range(num_exp - 1):
+		# for j in range(i + 1, num_exp):
+			j = i + 1
+			cols[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] = i
+			cols[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] = j
+			M[cnt*num_pix:(cnt + 1)*num_pix] = L[i] - L[j]
+			# W = 1/np.sqrt(cam.var(yi)/yi**2 + (cam.var(yj)/yj**2))
+			W = 1/np.sqrt(scaled_var[i] + scaled_var[j])
+			M[cnt*num_pix:(cnt + 1)*num_pix] = (L[i] - L[j]) * W
+			data[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] *= W
+			data[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] *= W
+			cnt += 1
 
 	O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
-	M = np.empty((num_exp - 1)*num_pix, dtype=np.float32)
-	for i in range(0, (num_exp - 1)*num_pix, num_pix):
-		c = i // num_pix
-		# # Weights don't seem to make a difference
-		# W = np.sqrt(1/(np.log(1+np.sqrt(1/np.exp(L[c])))**2 + \
-		# 			   np.log(1+np.sqrt(1/np.exp(L[c + 1])))**2))
-		# M[i:(i+num_pix)] = (L[c] - L[c + 1]) * W
-		M[i:(i+num_pix)] = (L[c] - L[c + 1])
+	# O = csc_matrix((data, (rows, cols)), shape=(num_exp*(num_exp - 1)//2*num_pix, num_exp))
 
 	# Solve the system and get linearise
 	logger.info('Solving the sparse linear system')
 	exp = lsqr(O, M)[0]
-	exp = np.exp(exp - exp.min()) * metadata['exp'].min()
+	mid = num_exp // 2
+	exp = np.exp(exp - exp[mid]) * metadata['exp'][mid]
+	# exp = np.exp(exp - exp.min()) * metadata['exp'].min()
 	logger.warning(f"Exposure times in EXIF: {metadata['exp']}, estimated exposures: {exp}")
 	return exp
 

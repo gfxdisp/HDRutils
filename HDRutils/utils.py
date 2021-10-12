@@ -152,6 +152,7 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	:cam: Camera noise parameters for better estimation
 	:return: Corrected exposure times
 	"""
+	assert len(files) > 1, f'Files not found or are invalid: {files}'
 	Y = np.array([io.imread(f, libraw=False) for f in sorted(files)], dtype=np.float32)
 	if metadata['raw_format']:
 		black_frame = np.tile(metadata['black_level'].reshape(2, 2),

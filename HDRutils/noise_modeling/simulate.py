@@ -103,9 +103,19 @@ class NormalNoise(NoiseModel):
 						   f'likely to be clipped due to saturation')
 
 		# Sample noise
-		var = img*self.a[None,None,:]
-		if not disable_static_noise:
-			var += self.b[None,None,:]
+		if img.ndim == 3:
+			var = img*self.a[None,None,:]
+			if not disable_static_noise:
+				var += self.b[None,None,:]
+		elif img.ndim == 2:
+			# Assume RGGB
+			# TODO: read from exif
+			var = np.zeros_like(img)
+			b = self.b if not disable_static_noise else np.zeros(3)
+			var[::2,::2] = img[::2,::2]*self.a[0] + b[0]
+			var[::2,1::2] = img[::2,1::2]*self.a[1] + b[1]
+			var[1::2,::2] = img[1::2,::2]*self.a[1] + b[1]
+			var[1::2,1::2] = img[1::2,1::2]*self.a[2] + b[2]
 		logger.info(f'Variance statistics: {var.min()}, {var.mean()}, {var.max()}')
 		return var
 

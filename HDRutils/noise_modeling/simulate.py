@@ -116,6 +116,10 @@ class NormalNoise(NoiseModel):
 			var[::2,1::2] = img[::2,1::2]*self.a[1] + b[1]
 			var[1::2,::2] = img[1::2,::2]*self.a[1] + b[1]
 			var[1::2,1::2] = img[1::2,1::2]*self.a[2] + b[2]
+		if var.min() < 0:
+			eps = np.abs(var).min()
+			logger.warning('Predicted variance is non-positive for some pixels. These will be clipped.')
+			var = np.maximum(var, eps)
 		logger.info(f'Variance statistics: {var.min()}, {var.mean()}, {var.max()}')
 		return var
 

@@ -184,10 +184,9 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	# If noise model is provided, store variances
 	L = np.log(np.stack([y[mask] for y in Y]))
 	num_exp, num_pix = L.shape
-	Y[:,np.logical_not(mask)] = 'nan'
+	Y[:,np.logical_not(mask)] = -1
 	scaled_var = np.stack([(cam.var(y)/y**2)[mask] for y in Y/(2**(cam.bits) - 1)]) \
 				 if cam else np.ones(num_exp)/np.sqrt(2)
-	# print(scaled_var.shape, L.shape, Y.shape)
 
 	assert num_pix > 0, 'No valid pixels found. Use closer exposure times'
 

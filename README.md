@@ -58,10 +58,10 @@ HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
 ### Alignment
-While merging, some hosting artifacts an be removed by setting `HDRutils(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes.
+While merging, some ghosting artifacts an be removed by setting `HDRutils(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes.
 
 ### Estimate exposure times
-The exposure times reported in EXIF camera metadata may be inaccurate. You can then solve a linear least squares problem to estimate most suitable exposure times by setting `HDRutils.merge(..., estimate_exp=True)`. The default behaviour is to use the brightest 10% of the pixels for estimation.
+The exposure times reported in EXIF camera metadata may be inaccurate. The merge function solves a linear least squares problem to estimate most suitable exposure times. This setting can be disabled by `HDRutils.merge(..., estimate_exp=False)`. The default behaviour is to use the brightest 10% of the pixels for estimation.
 
 ## Citation
 If you find this package useful, please cite

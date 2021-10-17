@@ -136,3 +136,18 @@ class NormalNoise(NoiseModel):
 		max_value = 2**bits - 1
 		quantized = ((img + noise + black_level/max_value).clip(0, 1)*max_value).astype(dtype)
 		return quantized
+
+
+	def set_bayer(self, size):
+		# Assume RGGB
+		assert len(size) == 2
+		self.bayer_a, self.bayer_b = np.zeros([2] + list(size))
+		self.bayer_a[::2,::2] = self.a[0]
+		self.bayer_a[::2,1::2] = self.a[1]
+		self.bayer_a[1::2,::2] = self.a[1]
+		self.bayer_a[1::2,1::2] = self.a[2]
+
+		self.bayer_b[::2,::2] = self.b[0]
+		self.bayer_b[::2,1::2] = self.b[1]
+		self.bayer_b[1::2,::2] = self.b[1]
+		self.bayer_b[1::2,1::2] = self.b[2]

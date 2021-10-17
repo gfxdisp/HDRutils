@@ -35,7 +35,14 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	"""
 	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
 	if estimate_exp:
-		data['exp'] = estimate_exposures(files, data, cam=cam)
+		exp = data['exp']
+		for i in range(len(exp) - 2, -1, -1):
+			data['exp'] = exp[i:i+2]
+			try:
+				exp[i:i+2] = estimate_exposures(files[i:i+2], data, cam=cam)
+			except RuntimeError:
+				logger.error(f'Exposure estimation failed for files {files[i:i+2]}')
+		data['exp'] = exp
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)

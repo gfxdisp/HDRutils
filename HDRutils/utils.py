@@ -6,7 +6,7 @@ import exifread
 import numpy as np, cv2
 import rawpy
 
-from scipy.sparse import csc_matrix
+from scipy.sparse import csc_matrix, diags
 from scipy.sparse.linalg import lsqr
 
 import HDRutils.io as io
@@ -138,7 +138,7 @@ def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_th
 	return unsaturated
 
 
-def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percentile=None,
+def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=16, percentile=None,
 					   invert_gamma=False, cam=None):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
@@ -154,6 +154,8 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	"""
 	assert len(files) > 1, f'Files not found or are invalid: {files}'
 	Y = np.array([io.imread(f, libraw=False) for f in sorted(files)], dtype=np.float32)
+
+	# Mask out saturated and noisy pixels
 	if metadata['raw_format']:
 		black_frame = np.tile(metadata['black_level'].reshape(2, 2),
 							  (metadata['h']//2, metadata['w']//2))
@@ -162,14 +164,17 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 		black_frame = metadata['black_level']
 		sat_point = sat_percent * (2**(8*metadata['dtype']).itemsize - 1)
 		unsaturated = [get_unsaturated(img=img, saturation_threshold_img=sat_point) for img in Y]
+	if cam:
+		cam.set_bayer(Y.shape[1:])
+		# noise_floor = 2**(cam.bits - 1)*(cam.bayer_a + np.sqrt(np.maximum(cam.bayer_a**2 + 4*cam.bayer_b, 0)))/2
+		noise_floor = noise_floor + 3*(2**cam.bits - 1)*np.sqrt(noise_floor/(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)
+		sat_ceil = metadata['saturation_point'] - 3*(2**cam.bits - 1)*np.sqrt(metadata['saturation_point']*(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)	# 3 STD = 99.7th percentile
+		unsaturated = Y <= sat_ceil
 
-	# Mask out saturated and noisy pixels
-	# TODO: noise floor and saturation ceiling using noise model
-	# y2 - ay - b = 0
-	above_noise_floor = Y >= black_frame + noise_floor
-	mask = np.logical_and(unsaturated, above_noise_floor).all(axis=0)
+	mask = np.logical_and(unsaturated, Y >= black_frame + noise_floor).all(axis=0)
 
 	# Solve the linear system on a fraction of the pixels when time/memory is limited
+	# percentile=90
 	if percentile:
 		threshold = np.percentile(Y[-1][mask], percentile)
 		mask = np.logical_and(mask, Y[-1] > threshold)
@@ -185,10 +190,13 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	L = np.log(np.stack([y[mask] for y in Y]))
 	num_exp, num_pix = L.shape
 	Y[:,np.logical_not(mask)] = -1
-	scaled_var = np.stack([(cam.var(y)/y**2)[mask] for y in Y/(2**(cam.bits) - 1)]) \
+	scaled_var = np.stack([(cam.var(y)/y**2)[mask] for y in Y/(2**cam.bits - 1)]) \
 				 if cam else np.ones(num_exp)/np.sqrt(2)
 
-	assert num_pix > 0, 'No valid pixels found. Use closer exposure times'
+	if num_pix == 0:
+		logger.error('No valid pixels found. Reverting to EXIF data')
+		# TODO: replace with a custom exception
+		raise RuntimeError
 
 	# Construct sparse linear system O.e = M
 	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
@@ -198,6 +206,7 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 	data[1::2] = -1
 	M = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
 	# M = np.empty((num_exp - 1)*num_exp//2*num_pix, dtype=np.float32)
+	W = np.zeros_like(M)
 	cnt = 0
 	for i in range(num_exp - 1):
 		# for j in range(i + 1, num_exp):
@@ -205,11 +214,7 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 			cols[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] = i
 			cols[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] = j
 			M[cnt*num_pix:(cnt + 1)*num_pix] = L[i] - L[j]
-			# W = 1/np.sqrt(cam.var(yi)/yi**2 + (cam.var(yj)/yj**2))
-			W = 1/np.sqrt(scaled_var[i] + scaled_var[j])
-			M[cnt*num_pix:(cnt + 1)*num_pix] = (L[i] - L[j]) * W
-			data[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] *= W
-			data[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] *= W
+			W[cnt*num_pix:(cnt + 1)*num_pix] = 1/(scaled_var[i] + scaled_var[j])
 			cnt += 1
 
 	O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
@@ -217,11 +222,20 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=10, percen
 
 	# Solve the system and get linearise
 	logger.info('Solving the sparse linear system')
-	exp = lsqr(O, M)[0]
 	mid = num_exp // 2
+	exp = lsqr(diags(W) @ O, W * M)[0]
+	# print(np.exp(exp - exp[mid]))
+	# # Iterative solution for Least absolute deviations
+	# exp = np.zeros(num_exp)
+	# for i in range(10):
+	# 	E = 1/np.abs(M - O @ exp)
+	# 	exp = lsqr(diags(E) @ O, E * M)[0]
+	# 	print(np.exp(exp - exp[mid]))
+
 	exp = np.exp(exp - exp[mid]) * metadata['exp'][mid]
-	# exp = np.exp(exp - exp.min()) * metadata['exp'].min()
-	logger.warning(f"Exposure times in EXIF: {metadata['exp']}, estimated exposures: {exp}")
+	reject = np.maximum(exp/metadata['exp'], metadata['exp']/exp) > 2
+	exp[reject] = metadata['exp'][reject]
+	logger.info(f"Exposure times in EXIF: {metadata['exp']}, estimated exposures: {exp}")
 	return exp
 
 

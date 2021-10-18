@@ -171,7 +171,7 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=16, percen
 		cam.set_bayer(Y.shape[1:])
 		# noise_floor = 2**(cam.bits - 1)*(cam.bayer_a + np.sqrt(np.maximum(cam.bayer_a**2 + 4*cam.bayer_b, 0)))/2
 		noise_floor = noise_floor + 3*(2**cam.bits - 1)*np.sqrt(noise_floor/(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)
-		sat_ceil = metadata['saturation_point'] - 3*(2**cam.bits - 1)*np.sqrt(metadata['saturation_point']*(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)	# 3 STD = 99.7th percentile
+		sat_ceil = metadata['saturation_point'] - 3*(2**cam.bits - 1)*np.sqrt(metadata['saturation_point']/(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)	# 3 STD = 99.7th percentile
 		unsaturated = Y <= sat_ceil
 
 	mask = np.logical_and(unsaturated, Y >= black_frame + noise_floor).all(axis=0)

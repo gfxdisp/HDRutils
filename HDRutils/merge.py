@@ -35,6 +35,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	"""
 	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
 	if estimate_exp:
+		# data['exp'] = estimate_exposures(files, data, cam=cam)
 		exp = data['exp']
 		for i in range(len(exp) - 2, -1, -1):
 			data['exp'] = exp[i:i+2]
@@ -54,14 +55,14 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 					   'saturated in the shortest exposure. The values for these pixels will ' \
 					   'be inaccurate.')
 
-	if HDR.min() < 0:
-		logger.info('Clipping negative pixels.')
-		HDR[HDR < 0] = 0
 	if wb == 'camera':
 		wb = data['white_balance'][:3]
 	if wb is not None:
 		assert len(wb) == 3, 'Provide list [R G B] corresponding to white patch in the image'
 		HDR = HDR * np.array(wb)[None,None,:]
+	if HDR.min() < 0:
+		logger.info('Clipping negative pixels.')
+		HDR[HDR < 0] = 0
 
 	if normalize:
 		HDR = HDR / HDR.max()

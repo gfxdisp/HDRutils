@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
-		  wb=[1, 1, 1], saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
-		  exp=None, gain=None, aperture=None, estimate_exp=True, cam=None):
+		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
+		  exp=None, gain=None, aperture=None, estimate_exp=False, cam=None):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -22,7 +22,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:demosaic_first: Order of operations
 	:color_space: Output color-space. Pick 1 of [sRGB, raw, Adobe, XYZ]
 	:normalize: Output pixels lie between 0 and 1
-	:wb: White-balance values after merging.
+	:wb: White-balance values after merging. Pick from [None, camera] or supply 3 values.
 	:saturation_percent: Saturation offset from reported white-point
 	:black_level: Camera's black level
 	:bayer_patter: Color filter array pattern of the camera
@@ -57,8 +57,11 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if HDR.min() < 0:
 		logger.info('Clipping negative pixels.')
 		HDR[HDR < 0] = 0
-	assert len(wb) == 3, 'Provide list [R G B] corresponding to white patch in the image'
-	HDR = HDR * np.array(wb)[None, None, :]
+	if wb == 'camera':
+		wb = data['white_balance'][:3]
+	if wb is not None:
+		assert len(wb) == 3, 'Provide list [R G B] corresponding to white patch in the image'
+		HDR = HDR * np.array(wb)[None,None,:]
 
 	if normalize:
 		HDR = HDR / HDR.max()

@@ -66,6 +66,9 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 		data['black_level'] = np.array(raw.black_level_per_channel)
 		# For some cameras, the provided white_level is incorrect
 		data['saturation_point'] = raw.white_level*sat_percent
+		assert raw.camera_whitebalance[1] == raw.camera_whitebalance[3] or raw.camera_whitebalance[3] == 0, \
+			   'Cannot figure out camera white_balance values'
+		data['white_balance'] = raw.camera_whitebalance[:3]
 	except rawpy._rawpy.LibRawFileUnsupportedError:
 		data['raw_format'] = False
 		longest_exposure = np.argmax(data['exp'] * data['gain'] * data['aperture'])
@@ -172,6 +175,10 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=16, percen
 		unsaturated = Y <= sat_ceil
 
 	mask = np.logical_and(unsaturated, Y >= black_frame + noise_floor).all(axis=0)
+	if mask.sum() == 0:
+		logger.error('No valid pixels found. Reverting to EXIF data')
+		# TODO: replace with a custom exception
+		raise RuntimeError
 
 	# Solve the linear system on a fraction of the pixels when time/memory is limited
 	# percentile=90
@@ -193,10 +200,7 @@ def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=16, percen
 	scaled_var = np.stack([(cam.var(y)/y**2)[mask] for y in Y/(2**cam.bits - 1)]) \
 				 if cam else np.ones(num_exp)/np.sqrt(2)
 
-	if num_pix == 0:
-		logger.error('No valid pixels found. Reverting to EXIF data')
-		# TODO: replace with a custom exception
-		raise RuntimeError
+	assert num_pix > 0
 
 	# Construct sparse linear system O.e = M
 	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')

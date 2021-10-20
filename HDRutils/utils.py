@@ -24,10 +24,10 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 	"""
 	# Read exposure time, gain and aperture from EXIF data
 	data = dict()
-	N = len(files)
+	data['N'] = len(files)
 
 	try:
-		data['exp'], data['gain'], data['aperture'] = np.empty((3, N))
+		data['exp'], data['gain'], data['aperture'] = np.empty((3, data['N']))
 		for i, file in enumerate(files):
 			with open(file, 'rb') as f:
 				tags = exifread.process_file(f)
@@ -53,9 +53,9 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 		# Manually populate metadata for non-RAW formats
 		assert exp is not None, 'Unable to read metada from file, please supply manually'
 		data['exp'] = np.array(exp)
-		data['gain'] = np.ones(N) if gain is None else np.array(gain)
-		data['aperture'] = np.ones(N) if aperture is None else np.array(aperture)
-		assert len(exp) == N and len(data['gain']) == N and len(data['aperture']) == N, \
+		data['gain'] = np.ones(data['N']) if gain is None else np.array(gain)
+		data['aperture'] = np.ones(data['N']) if aperture is None else np.array(aperture)
+		assert len(exp) == data['N'] and len(data['gain']) == data['N'] and len(data['aperture']) == data['N'], \
 			'Mismatch in dimensions of metadata supplied'
 
 	try:
@@ -90,7 +90,7 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 
 	data['color_space'] = color_space.lower()
 
-	logger.info(f"Stack contains {N} images of size: {data['h']}x{data['w']}")
+	logger.info(f"Stack contains {data['N']} images of size: {data['h']}x{data['w']}")
 	logger.info(f"Exp: {data['exp']}")
 	logger.info(f"Gain: {data['gain']}")
 	logger.info(f"aperture: {data['aperture']}")
@@ -141,105 +141,88 @@ def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_th
 	return unsaturated
 
 
-def estimate_exposures(files, metadata, sat_percent=0.98, noise_floor=16, percentile=None,
+def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentile=10,
 					   invert_gamma=False, cam=None):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
-	:files: Image filenames
-	:gains: Internal camera metadata dictionary
-	:sat_percent: Saturation offset from reported white-point
+	:imgs: Image stack
+	:exif_exp: Exposure times read from image metadata
+	:metadata: Internal camera metadata dictionary
+	:loss: Pick of 'l2' for least squares and 'l1' for least absolute deviation
 	:noise_floor: All pixels smaller than this will be ignored
-	:percentile: Use a small percentage of all the pixels for the faster estimation
+	:percentile: Use a small percentage of the least noisy pixels for the estimation
 	:invert_gamma: If the images are gamma correct invert to work with linear values
 	:cam: Camera noise parameters for better estimation
 	:return: Corrected exposure times
 	"""
-	assert len(files) > 1, f'Files not found or are invalid: {files}'
-	Y = np.array([io.imread(f, libraw=False) for f in sorted(files)], dtype=np.float32)
+	num_exp = len(imgs)
+	num_pix = int(percentile/100*metadata['h']*metadata['h'])
+	assert num_exp > 1, f'Files not found or are invalid: {files}'
 
 	# Mask out saturated and noisy pixels
-	if metadata['raw_format']:
-		black_frame = np.tile(metadata['black_level'].reshape(2, 2),
-							  (metadata['h']//2, metadata['w']//2))
-		unsaturated = [get_unsaturated(img, metadata['saturation_point']) for img in Y]
-	else:
-		black_frame = metadata['black_level']
-		sat_point = sat_percent * (2**(8*metadata['dtype']).itemsize - 1)
-		unsaturated = [get_unsaturated(img=img, saturation_threshold_img=sat_point) for img in Y]
-	if cam:
-		cam.set_bayer(Y.shape[1:])
-		# noise_floor = 2**(cam.bits - 1)*(cam.bayer_a + np.sqrt(np.maximum(cam.bayer_a**2 + 4*cam.bayer_b, 0)))/2
-		noise_floor = noise_floor + 3*(2**cam.bits - 1)*np.sqrt(noise_floor/(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)
-		sat_ceil = metadata['saturation_point'] - 3*(2**cam.bits - 1)*np.sqrt(metadata['saturation_point']/(2**cam.bits - 1)*cam.bayer_a + cam.bayer_b)	# 3 STD = 99.7th percentile
-		unsaturated = Y <= sat_ceil
+	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2)) \
+				  if metadata['raw_format'] else metadata['black_level']
 
-	mask = np.logical_and(unsaturated, Y >= black_frame + noise_floor).all(axis=0)
-	if mask.sum() == 0:
-		logger.error('No valid pixels found. Reverting to EXIF data')
-		# TODO: replace with a custom exception
-		raise RuntimeError
-
-	# Solve the linear system on a fraction of the pixels when time/memory is limited
-	# percentile=90
-	if percentile:
-		threshold = np.percentile(Y[-1][mask], percentile)
-		mask = np.logical_and(mask, Y[-1] > threshold)
-	Y = np.maximum(Y - black_frame, 0)
+	Y = np.maximum(imgs - black_frame, 1e-6)	# Add epsilon since we need log(Y)
 	if invert_gamma:
 		max_value = np.iinfo(metadata['dtype']).max
 		Y = (Y / max_value)**(invert_gamma) * max_value
 
-	# TODO: Handle imamge stacks with varying gain and aperture
-	assert len(set(metadata['gain'])) == 1 and len(set(metadata['aperture'])) == 1
-
 	# If noise model is provided, store variances
-	L = np.log(np.stack([y[mask] for y in Y]))
-	num_exp, num_pix = L.shape
-	Y[:,np.logical_not(mask)] = -1
-	scaled_var = np.stack([(cam.var(y)/y**2)[mask] for y in Y/(2**cam.bits - 1)]) \
-				 if cam else np.ones(num_exp)/np.sqrt(2)
+	L = np.log(Y)
+	bits = cam.bits if cam else 14
+	scaled_var = np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**bits - 1)])
 
-	assert num_pix > 0
 
 	# Construct sparse linear system O.e = M
 	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
 	rows = np.arange(0, (num_exp - 1)*num_pix, 0.5)
-	# rows = np.arange(0, num_exp*(num_exp - 1)//2*num_pix, 0.5)
 	cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
 	data[1::2] = -1
 	M = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
-	# M = np.empty((num_exp - 1)*num_exp//2*num_pix, dtype=np.float32)
 	W = np.zeros_like(M)
-	cnt = 0
 	for i in range(num_exp - 1):
-		# for j in range(i + 1, num_exp):
-			j = i + 1
-			cols[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] = i
-			cols[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] = j
-			M[cnt*num_pix:(cnt + 1)*num_pix] = L[i] - L[j]
-			W[cnt*num_pix:(cnt + 1)*num_pix] = 1/(scaled_var[i] + scaled_var[j])
-			cnt += 1
+		cols[i*num_pix*2:(i + 1)*num_pix*2:2] = i
+		# Collect unsaturated pixels from all longer exposures
+		for j in range(i + 1, num_exp):
+			mask = np.stack((Y[i] + black_frame < metadata['saturation_point'],
+							 Y[j] + black_frame < metadata['saturation_point'],
+							 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
+			if mask.sum() < num_pix:
+				continue
+			weights = np.concatenate((W[i*num_pix:(i+1)*num_pix],
+									 (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()))
+			logdiff = np.concatenate((M[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
+			selected = np.argsort(weights)[-num_pix:]
+			W[i*num_pix:(i + 1)*num_pix] = weights[selected]
+			M[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
+			cols[i*num_pix*2 + 1:(i + 1)*num_pix*2:2][selected > num_pix] = j
 
 	O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
-	# O = csc_matrix((data, (rows, cols)), shape=(num_exp*(num_exp - 1)//2*num_pix, num_exp))
 
-	# Solve the system and get linearise
-	logger.info('Solving the sparse linear system')
-	mid = num_exp // 2
-	exp = lsqr(diags(W) @ O, W * M)[0]
-	# print(np.exp(exp - exp[mid]))
-	# # Iterative solution for Least absolute deviations
-	# exp = np.zeros(num_exp)
-	# for i in range(10):
-	# 	E = 1/np.abs(M - O @ exp)
-	# 	exp = lsqr(diags(E) @ O, E * M)[0]
-	# 	print(np.exp(exp - exp[mid]))
-
-	exp = np.exp(exp - exp[mid]) * metadata['exp'][mid]
-	reject = np.maximum(exp/metadata['exp'], metadata['exp']/exp) > 2
-	exp[reject] = metadata['exp'][reject]
-	logger.info(f"Exposure times in EXIF: {metadata['exp']}, estimated exposures: {exp}")
+	# Solve the system using WLS
+	if loss == 'l2':
+		logger.info('Solving the sparse linear system using least squares')
+		exp = lsqr(diags(W) @ O, W * M)[0]
+	elif loss == 'l1':
+		# Iterative solution for Least absolute deviations
+		exp = lsqr(diags(W) @ O, W * M)[0]
+		exp = np.exp(exp - exp.max()) * exif_exp.max()
+		# exp = np.log(exp)
+		exp = np.log((exp + exif_exp)/2)
+		iters = 10
+		logger.info(f'Running iterative weighted least absolute deviations for {iter} iterations')
+		for i in range(iters):
+			E = 1/np.maximum(1e-5, np.abs(M - O @ exp))
+			# print(np.exp(exp - exp.max()) * exif_exp.max())
+			exp = lsqr(diags(E) @ O, E * M)[0]
+	exp = np.exp(exp - exp.max()) * exif_exp.max()
+	logger.warning(f"Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}")
+	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
+	exp[reject] = exif_exp[reject]
+	if reject.any():
+		logger.warning(f'Exposure estimation failed {reject}. Try using more pixels')
 	return exp
 
 

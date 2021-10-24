@@ -141,8 +141,8 @@ def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_th
 	return unsaturated
 
 
-def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentile=10,
-					   invert_gamma=False, cam=None):
+def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentile=.001,
+					   invert_gamma=False, cam=None, method='gfxdisp'):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
@@ -157,7 +157,6 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 	:return: Corrected exposure times
 	"""
 	num_exp = len(imgs)
-	num_pix = int(percentile/100*metadata['h']*metadata['h'])
 	assert num_exp > 1, f'Files not found or are invalid: {files}'
 
 	# Mask out saturated and noisy pixels
@@ -174,50 +173,83 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 	bits = cam.bits if cam else 14
 	scaled_var = np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**bits - 1)])
 
+	if method == 'cerman':
+		from skimage.exposure import histogram, match_histograms
+		rows, cols, M, W = np.zeros((4, 0))
+		for i in range(num_exp - 1):
+			im1, im2 = Y[i], Y[i+1]
+			mask = np.stack((im1 + black_frame < metadata['saturation_point'],
+							 im2 + black_frame < metadata['saturation_point'],
+							 im1 > noise_floor, im2 > noise_floor)).all(axis=0)
+			im1_hat = match_histograms(im1, im2)
+			im2_hat = match_histograms(im2, im1)
 
-	# Construct sparse linear system O.e = M
-	logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
-	rows = np.arange(0, (num_exp - 1)*num_pix, 0.5)
-	cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
-	data[1::2] = -1
-	M = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
-	W = np.zeros_like(M)
-	for i in range(num_exp - 1):
-		cols[i*num_pix*2:(i + 1)*num_pix*2:2] = i
-		# Collect unsaturated pixels from all longer exposures
-		for j in range(i + 1, num_exp):
-			mask = np.stack((Y[i] + black_frame < metadata['saturation_point'],
-							 Y[j] + black_frame < metadata['saturation_point'],
-							 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
-			if mask.sum() < num_pix:
-				continue
-			weights = np.concatenate((W[i*num_pix:(i+1)*num_pix],
-									 (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()))
-			logdiff = np.concatenate((M[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
-			selected = np.argsort(weights)[-num_pix:]
-			W[i*num_pix:(i + 1)*num_pix] = weights[selected]
-			M[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
-			cols[i*num_pix*2 + 1:(i + 1)*num_pix*2:2][selected > num_pix] = j
+			num_pix = np.count_nonzero(mask)
+			rows = np.concatenate((rows, np.arange(len(rows), len(rows)+2*num_pix)))
+			cols = np.concatenate((cols, np.repeat(i, 2*num_pix)))
+			M = np.concatenate((M, (im1_hat[mask]/im1[mask]),
+							   (im2[mask]/im2_hat[mask])))
+			im1, im2 = im1.astype(np.uint16), im2.astype(np.uint16)
+			counts, bins = histogram(im1)
+			weights1 = np.sqrt(counts[np.searchsorted(bins, im1[mask])])
+			counts, bins = histogram(im2)
+			weights2 = np.sqrt(counts[np.searchsorted(bins, im2[mask])])
+			W = np.concatenate((W, weights1, weights2))
 
-	O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
-
-	# Solve the system using WLS
-	if loss == 'l2':
-		logger.info('Solving the sparse linear system using least squares')
+		data = np.ones_like(rows)
+		O = csc_matrix((data, (rows, cols)), shape=(data.shape[0], (num_exp - 1)))
 		exp = lsqr(diags(W) @ O, W * M)[0]
-	elif loss == 'l1':
-		# Iterative solution for Least absolute deviations
-		exp = lsqr(diags(W) @ O, W * M)[0]
+		WO = (diags(W) @ O).todense()
+		exp = np.append(exp, metadata['exp'][-1])
+		for i in range(num_exp - 2, -1, -1):
+			exp[i] = metadata['exp'][i+1]/exp[i]
+
+	elif method == 'gfxdisp':
+		# Construct sparse linear system O.e = M
+		num_pix = int(percentile/100*metadata['h']*metadata['w'])
+		logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
+		rows = np.arange(0, (num_exp - 1)*num_pix, 0.5)
+		cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
+		data[1::2] = -1
+		M = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
+		W = np.zeros_like(M)
+		for i in range(num_exp - 1):
+			cols[i*num_pix*2:(i + 1)*num_pix*2:2] = i
+			# Collect unsaturated pixels from all longer exposures
+			for j in range(i + 1, num_exp):
+				mask = np.stack((Y[i] + black_frame < metadata['saturation_point'],
+								 Y[j] + black_frame < metadata['saturation_point'],
+								 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
+				if mask.sum() < num_pix:
+					continue
+				weights = np.concatenate((W[i*num_pix:(i+1)*num_pix],
+										 (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()))
+				logdiff = np.concatenate((M[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
+				selected = np.argsort(weights)[-num_pix:]
+				W[i*num_pix:(i + 1)*num_pix] = weights[selected]
+				M[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
+				cols[i*num_pix*2 + 1:(i + 1)*num_pix*2:2][selected > num_pix] = j
+
+		O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
+
+		# Solve the system using WLS
+		if loss == 'l2':
+			logger.info('Solving the sparse linear system using least squares')
+			exp = lsqr(diags(W) @ O, W * M)[0]
+		elif loss == 'l1':
+			# Iterative solution for Least absolute deviations
+			exp = lsqr(diags(W) @ O, W * M)[0]
+			exp = np.exp(exp - exp.max()) * exif_exp.max()
+			# exp = np.log(exp)
+			exp = np.log((exp + exif_exp)/2)
+			iters = 10
+			logger.info(f'Running iterative weighted least absolute deviations for {iter} iterations')
+			for i in range(iters):
+				E = 1/np.maximum(1e-5, np.abs(M - O @ exp))
+				# print(np.exp(exp - exp.max()) * exif_exp.max())
+				exp = lsqr(diags(E) @ O, E * M)[0]
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
-		# exp = np.log(exp)
-		exp = np.log((exp + exif_exp)/2)
-		iters = 10
-		logger.info(f'Running iterative weighted least absolute deviations for {iter} iterations')
-		for i in range(iters):
-			E = 1/np.maximum(1e-5, np.abs(M - O @ exp))
-			# print(np.exp(exp - exp.max()) * exif_exp.max())
-			exp = lsqr(diags(E) @ O, E * M)[0]
-	exp = np.exp(exp - exp.max()) * exif_exp.max()
+
 	logger.warning(f"Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}")
 	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
 	exp[reject] = exif_exp[reject]

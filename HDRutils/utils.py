@@ -154,8 +154,10 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 	:percentile: Use a small percentage of the least noisy pixels for the estimation
 	:invert_gamma: If the images are gamma correct invert to work with linear values
 	:cam: Camera noise parameters for better estimation
+	:method: Pick from ['gfxdisp', 'cerman']
 	:return: Corrected exposure times
 	"""
+	assert method in ('gfxdisp', 'cerman')
 	num_exp = len(imgs)
 	assert num_exp > 1, f'Files not found or are invalid: {files}'
 
@@ -168,27 +170,33 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 		max_value = np.iinfo(metadata['dtype']).max
 		Y = (Y / max_value)**(invert_gamma) * max_value
 
-	# If noise model is provided, store variances
-	L = np.log(Y)
-	bits = cam.bits if cam else 14
-	scaled_var = np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**bits - 1)])
-
 	if method == 'cerman':
+		'''
+		L. Cerman and V. Hlavac, “Exposure time estimation for high dynamic range imaging with
+		hand held camera” in Proc. of Computer Vision Winter Workshop, Czech Republic. 2006.
+		'''
 		from skimage.exposure import histogram, match_histograms
-		rows, cols, M, W = np.zeros((4, 0))
+		rows, cols, m, W = np.zeros((4, 0))
 		for i in range(num_exp - 1):
+			# Ensure images are sorted in increasing order of exposure time
+			assert all(e1 <= e2 for e1, e2 in zip(exif_exp[:-1], exif_exp[1:])), \
+				   'Please name the input files in increasing order of exposure time when sorted'
 			im1, im2 = Y[i], Y[i+1]
 			mask = np.stack((im1 + black_frame < metadata['saturation_point'],
 							 im2 + black_frame < metadata['saturation_point'],
 							 im1 > noise_floor, im2 > noise_floor)).all(axis=0)
+
+			# Match histograms of consecutive exposures
 			im1_hat = match_histograms(im1, im2)
 			im2_hat = match_histograms(im2, im1)
 
+			# Construct the simple sparse linear system. There are 2 sets for each pair (Eq. 4)
 			num_pix = np.count_nonzero(mask)
-			rows = np.concatenate((rows, np.arange(len(rows), len(rows)+2*num_pix)))
+			rows = np.concatenate((rows, np.arange(2*num_pix) + len(rows)))
 			cols = np.concatenate((cols, np.repeat(i, 2*num_pix)))
-			M = np.concatenate((M, (im1_hat[mask]/im1[mask]),
-							   (im2[mask]/im2_hat[mask])))
+			m = np.concatenate((m, (im1_hat[mask]/im1[mask]), (im2[mask]/im2_hat[mask])))
+			
+			# Weights are given by sqrt() of histogram counts (Eq. 4)
 			im1, im2 = im1.astype(np.uint16), im2.astype(np.uint16)
 			counts, bins = histogram(im1)
 			weights1 = np.sqrt(counts[np.searchsorted(bins, im1[mask])])
@@ -198,21 +206,28 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 
 		data = np.ones_like(rows)
 		O = csc_matrix((data, (rows, cols)), shape=(data.shape[0], (num_exp - 1)))
-		exp = lsqr(diags(W) @ O, W * M)[0]
-		WO = (diags(W) @ O).todense()
-		exp = np.append(exp, metadata['exp'][-1])
+		exp = lsqr(diags(W) @ O, W * m)[0]
+		# Recover exposure times matching after matching longest value
+		exp = np.append(exp, exif_exp[-1])
 		for i in range(num_exp - 2, -1, -1):
-			exp[i] = metadata['exp'][i+1]/exp[i]
+			exp[i] = exif_exp[i+1]/exp[i]
 
 	elif method == 'gfxdisp':
-		# Construct sparse linear system O.e = M
+		logger.info(f'Estimate using logarithmic linear system with noise model')
 		num_pix = int(percentile/100*metadata['h']*metadata['w'])
-		logger.info(f'Constructing sparse matrix (O) and vector (M) using {num_pix} pixels')
+		
+		# If noise parameters is provided, retrieve variances, else use simplified model
+		L = np.log(Y)
+		bits = cam.bits if cam else 14
+		scaled_var = np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**bits - 1)])
+
+		# Construct logarithmic sparse linear system W.O.e = W.m
+		logger.info(f'Constructing sparse matrix (O) and vector (m) using {num_pix} pixels')
 		rows = np.arange(0, (num_exp - 1)*num_pix, 0.5)
 		cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
 		data[1::2] = -1
-		M = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
-		W = np.zeros_like(M)
+		m = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
+		W = np.zeros_like(m)
 		for i in range(num_exp - 1):
 			cols[i*num_pix*2:(i + 1)*num_pix*2:2] = i
 			# Collect unsaturated pixels from all longer exposures
@@ -224,30 +239,28 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 					continue
 				weights = np.concatenate((W[i*num_pix:(i+1)*num_pix],
 										 (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()))
-				logdiff = np.concatenate((M[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
+				logdiff = np.concatenate((m[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
 				selected = np.argsort(weights)[-num_pix:]
 				W[i*num_pix:(i + 1)*num_pix] = weights[selected]
-				M[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
+				m[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
 				cols[i*num_pix*2 + 1:(i + 1)*num_pix*2:2][selected > num_pix] = j
 
 		O = csc_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
 
-		# Solve the system using WLS
 		if loss == 'l2':
 			logger.info('Solving the sparse linear system using least squares')
-			exp = lsqr(diags(W) @ O, W * M)[0]
+			exp = lsqr(diags(W) @ O, W * m)[0]
 		elif loss == 'l1':
 			# Iterative solution for Least absolute deviations
-			exp = lsqr(diags(W) @ O, W * M)[0]
+			exp = lsqr(diags(W) @ O, W * m)[0]
 			exp = np.exp(exp - exp.max()) * exif_exp.max()
-			# exp = np.log(exp)
 			exp = np.log((exp + exif_exp)/2)
 			iters = 10
 			logger.info(f'Running iterative weighted least absolute deviations for {iter} iterations')
 			for i in range(iters):
-				E = 1/np.maximum(1e-5, np.abs(M - O @ exp))
+				E = 1/np.maximum(1e-5, np.abs(m - O @ exp))
 				# print(np.exp(exp - exp.max()) * exif_exp.max())
-				exp = lsqr(diags(E) @ O, E * M)[0]
+				exp = lsqr(diags(E) @ O, E * m)[0]
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.warning(f"Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}")

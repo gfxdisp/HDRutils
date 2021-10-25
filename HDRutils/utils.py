@@ -195,6 +195,9 @@ def estimate_exposures(imgs, exif_exp, metadata, loss, noise_floor=16, percentil
 									 (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()))
 			logdiff = np.concatenate((M[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
 			selected = np.argsort(weights)[-num_pix:]
+			# empty = np.zeros(metadata['h']*metadata['w'])
+			# empty[selected - num_pix] = 1
+			# pfs.view(empty.reshape(metadata['h'], metadata['w']))
 			W[i*num_pix:(i + 1)*num_pix] = weights[selected]
 			M[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
 			cols[i*num_pix*2 + 1:(i + 1)*num_pix*2:2][selected > num_pix] = j

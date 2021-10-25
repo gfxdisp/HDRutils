@@ -37,6 +37,10 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if estimate_exp:
 		# TODO: Handle imamge stacks with varying gain and aperture
 		assert len(set(data['gain'])) == 1 and len(set(data['aperture'])) == 1
+		if do_align:
+			# TODO: Perform exposure alignment after homography (adds additional overhead since
+			# images need to be demosaiced)
+			logger.warning('Exposure alignment is done before homography, may cause it to fail')
 
 		Y = np.array([io.imread(f, libraw=False) for f in files], dtype=np.float32)
 		exif_exp = data['exp']
@@ -131,7 +135,7 @@ def imread_merge_demosaic(files, metadata, do_align, pattern):
 		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
 							 * metadata['aperture'])[len(files)//2]
 		ref_img = io.imread(files[ref_idx]).astype(np.float32)
-		if not metadata['raw_format']:
+		if metadata['raw_format']:
 			ref_img = cd.demosaicing_CFA_Bayer_bilinear(ref_img, pattern=pattern)
 		ref_img = ref_img / metadata['exp'][ref_idx] \
 						  / metadata['gain'][ref_idx] \

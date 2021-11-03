@@ -24,6 +24,8 @@ setup(
           'colour-demosaicing',
           'matplotlib',
           'opencv_python',
+          'scipy',
+          'scikit-image'
       ],
   classifiers=[
     'Development Status :: 3 - Alpha',

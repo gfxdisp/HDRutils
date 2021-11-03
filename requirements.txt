@@ -6,3 +6,5 @@ rawpy==0.16.0
 matplotlib==3.3.3
 numpy==1.19.5
 colour_demosaicing==0.1.6
+scipy==1.7.1
+scikit-image==0.18.3

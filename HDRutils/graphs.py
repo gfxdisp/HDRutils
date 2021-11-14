@@ -19,15 +19,14 @@ def scatter_pixels(in_img, out_img, density=0.01):
 	colors = ((1,0,0,0.1), (0,1,0,1), (0,0,1,0.1))
 
 	logger.info(f'Using {np.count_nonzero(pixel_mask)} pixels for scatter plot')
+	fig, ax = plt.subplots()
 	for i, c in enumerate(colors):
-		plt.scatter(in_img[...,i][pixel_mask], out_img[...,i][pixel_mask],
+		ax.scatter(in_img[...,i][pixel_mask], out_img[...,i][pixel_mask],
 					color=c, marker='.', s=1)
-	plt.grid()
-	plt.xlabel('Ground truth pixel value')
-	plt.ylabel('Test image pixel value')
-	plt.yscale('log')
-	plt.xscale('log')
+	ax.grid()
+	ax.set_xlabel('Ground truth pixel value')
+	ax.set_ylabel('Test image pixel value')
+	ax.set_yscale('log')
+	ax.set_xscale('log')
 
-	# plt.xlim(0, 1)
-	# plt.ylim(min_value, 1)
-	plt.show()
+	return fig, ax

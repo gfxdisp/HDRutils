@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
-		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None):
+		  exp=None, gain=None, aperture=None, estimate_exp='gfxdisp', cam='default',
+		  perc=10, outlier='cerman'):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -29,8 +30,10 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:exp: Exposure time (in seconds) required when metadata is not present
 	:gain: Camera gain (ISO/100) required when metadata is not present
 	:aperture: Aperture required when metadata is not present
-	:estimate_exp: Estimate exposure times by solving a system. Pick 1 of ['l1','l2'] to minimise
+	:estimate_exp: Estimate exposure times by solving a system. Pick 1 of ['gfxdisp','cerman']
 	:cam: Camera noise model for exposure estimation
+	:perc: Estimate exposures using min-variance rows
+	:outlier: Iterative outlier removal. Pick 1 of [None, 'cerman', 'ransac']
 	:return: Merged FP32 HDR image
 	"""
 	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
@@ -46,12 +49,12 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 		exif_exp = data['exp']
 		estimate = np.ones(data['N'], dtype=bool)
 		for i in range(data['N']):
-			# Skip images where > 50% of the pixels are saturated
-			if (Y[i] >= data['saturation_point']).sum() > 0.5*Y[i].size:
+			# Skip images where > 90% of the pixels are saturated
+			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
 				estimate[i] = False
 		data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
-												   estimate_exp, cam=cam)
+												   estimate_exp, cam=cam, outlier=outlier)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
@@ -98,7 +101,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 
 	num_saturated = 0
 	num, denom = np.zeros((2, metadata['h'], metadata['w'], 3))
-	for i, f in enumerate(tqdm.tqdm(files)):
+	for i, f in enumerate(tqdm.tqdm(files, leave=False)):
 		raw = rawpy.imread(f)
 		img = io.imread_libraw(raw, color_space=metadata['color_space'])
 		saturation_point_img = sat_percent * (2**(8*img.dtype.itemsize) - 1)
@@ -178,7 +181,7 @@ def imread_merge_demosaic(files, metadata, do_align, pattern):
 	num, denom = np.zeros((2, metadata['h'], metadata['w']))
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2),
 						  (metadata['h']//2, metadata['w']//2))
-	for i, f in enumerate(tqdm.tqdm(files)):
+	for i, f in enumerate(tqdm.tqdm(files, leave=False)):
 		img = io.imread(f, libraw=False).astype(np.float32)
 		if do_align and i != ref_idx:
 			i_img = io.imread(f).astype(np.float32)

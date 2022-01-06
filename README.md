@@ -60,11 +60,9 @@ HDRutils.imwrite('merged.exr', HDR_img)
 ### Alignment
 While merging, some ghosting artifacts an be removed by setting `HDRutils.merge(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes.
 
-### Estimate exposure times
-The exposure times reported in EXIF camera metadata may be inaccurate. The merge function solves a linear least squares problem to estimate most suitable exposure times. This setting can be disabled by `HDRutils.merge(..., estimate_exp=False)`. The default behaviour is to use the brightest 10% of the pixels for estimation.
 
 ### Exposure estimation
-Exposure metadata from EXIF may be inaccurate. The default behaviour is to estimate relative exposures directly from the image stack. If you are confident that metadata is correct, disable exposure estimation by specifying `HDRutils.merge(..., estimate_exp=None)`.
+Exposure metadata from EXIF may be inaccurate. The default behaviour is to estimate relative exposures directly from the image stack by solving a linear least squares problem. If you are confident that metadata is correct, disable exposure estimation by specifying `HDRutils.merge(..., estimate_exp=False)`.
 
 For robustness, the estimation includes an iterative outlier removal procedure which may take a couple of minutes to converge especially for large images and deep stacks. You can override this by `HDRutils.merge(..., outlier=None)`. For best results, supply the exact camera (instance of `HDRutils.NormalNoise`). Otherwise a default camera that works reasonably well for tested images will be used.
 

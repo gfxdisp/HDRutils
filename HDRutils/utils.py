@@ -1,5 +1,4 @@
-import logging, os, tqdm, gc
-from numpy.core.numeric import ones_like
+import logging, gc
 from fractions import Fraction
 import exifread
 
@@ -160,7 +159,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	"""
 	assert method in ('gfxdisp', 'cerman')
 	num_exp = len(imgs)
-	assert num_exp > 1, f'Files not found or are invalid: {files}'
+	assert num_exp > 1, 'Files not found or are invalid'
 
 	# Mask out saturated and noisy pixels
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2)) \
@@ -215,36 +214,36 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		
 		# If noise parameters is provided, retrieve variances, else use simplified model
 		L = np.log(Y)
-		if cam == 'default':
+		if cam == 'test':
 			cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
-		bits = cam.bits if cam else 14
-		scaled_var = np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**bits - 1)])
+			scaled_var = np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**cam.bits - 1)])
+		else:
+			scaled_var = 1/Y
 
 		# Construct logarithmic sparse linear system W.O.e = W.m
 		logger.info(f'Constructing sparse matrix (O) and vector (m) using {num_pix} pixels')
-		rows = np.arange(0, (num_exp - 1)*num_pix, 0.5)
+		rows = np.arange(0, (num_exp - 1)*num_exp/2*num_pix, 0.5)
 		cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
 		data[1::2] = -1
-		m = np.zeros((num_exp - 1)*num_pix, dtype=np.float32)
+		m = np.zeros((num_exp - 1)*num_exp//2*num_pix, dtype=np.float32)
 		W = np.zeros_like(m)
+		cnt = 0
 		for i in range(num_exp - 1):
-			cols[i*num_pix*2:(i + 1)*num_pix*2:2] = i
 			# Collect unsaturated pixels from all longer exposures
 			for j in range(i + 1, num_exp):
+				# Pick valid pixels with highest weights
 				mask = np.stack((Y[i] + black_frame < metadata['saturation_point'],
 								 Y[j] + black_frame < metadata['saturation_point'],
 								 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
-				# if mask.sum() < num_pix:
-				# 	continue
-				weights = np.concatenate((W[i*num_pix:(i+1)*num_pix],
-										 (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()))
-				logdiff = np.concatenate((m[i*num_pix:(i+1)*num_pix], (L[i] - L[j]).flatten()))
+				weights = (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()
 				selected = np.argsort(weights)[-num_pix:]
-				W[i*num_pix:(i + 1)*num_pix] = weights[selected]
-				m[i*num_pix:(i + 1)*num_pix] = logdiff[selected]
-				cols[i*num_pix*2 + 1:(i + 1)*num_pix*2:2][selected > num_pix] = j
+				W[cnt*num_pix:(cnt + 1)*num_pix] = weights[selected]
+				m[cnt*num_pix:(cnt + 1)*num_pix] = (L[i] - L[j]).flatten()[selected]
+				cols[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] = i
+				cols[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] = j
+				cnt += 1
 
-		O = csr_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_pix, num_exp))
+		O = csr_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_exp//2*num_pix, num_exp))
 
 	logger.info('Solving the sparse linear system using least squares')
 	if outlier == 'cerman':
@@ -264,7 +263,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			t.set_description(f'loss={err.mean()}')
 			del err, selected
 			gc.collect()
-		logger.warning(f'Used {O.shape[0]/(num_exp - 1)/num_pix*100}% of the initial pixels')
+		logger.warning(f'Used {O.shape[0]/((num_exp - 1)*num_exp/2*num_pix)*100:.2f}% of the initial pixels')
 
 	elif outlier == 'ransac':
 		assert method == 'gfxdisp'
@@ -275,7 +274,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		loss = np.finfo(float).max
 		WO = diags(W) @ O
 		Wm = W*m
-		t = trange(100, leave=False)
+		t = trange(1000, leave=False)
 		for i in t:
 			np.random.shuffle(selected)
 			exp_i = lsqr(WO[selected], Wm[selected])[0]
@@ -299,7 +298,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	elif method == 'gfxdisp':
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
-	# logger.warning(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times')
+	logger.warning(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times')
 	# reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
 	# exp[reject] = exif_exp[reject]
 	# if reject.any():

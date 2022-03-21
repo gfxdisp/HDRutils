@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
-		  exp=None, gain=None, aperture=None, estimate_exp='gfxdisp', cam='default',
+		  exp=None, gain=None, aperture=None, estimate_exp='gfxdisp', cam=None,
 		  perc=10, outlier='cerman'):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper

@@ -6,6 +6,7 @@ import colour_demosaicing as cd
 
 import HDRutils.io as io
 from HDRutils.utils import *
+from HDRutils.exposures import estimate_exposures
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,16 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 			logger.warning('Exposure alignment is done before homography, may cause it to fail')
 
 		Y = np.array([io.imread(f, libraw=False) for f in files], dtype=np.float32)
-		exif_exp = data['exp']
 		estimate = np.ones(data['N'], dtype=bool)
+		black_frame = np.tile(data['black_level'].reshape(2, 2), (data['h']//2, data['w']//2)) \
+					  if data['raw_format'] else data['black_level']
 		for i in range(data['N']):
 			# Skip images where > 90% of the pixels are saturated
-			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size:
+			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size or data['exp'][i] > 10:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
+				estimate[i] = False
+			elif (Y[i] >= black_frame).sum() < 0.6*Y[i].size:
+				logger.warning(f'Skipping exposure estimation for file {files[i]} due to noise')
 				estimate[i] = False
 		data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
 												   estimate_exp, cam=cam, outlier=outlier)

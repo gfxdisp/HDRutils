@@ -50,12 +50,16 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 		estimate = np.ones(data['N'], dtype=bool)
 		black_frame = np.tile(data['black_level'].reshape(2, 2), (data['h']//2, data['w']//2)) \
 					  if data['raw_format'] else data['black_level']
+		if Y.ndim == 4:
+			assert Y.shape[-1] == 3 or Y[...,3].all() == 0
+			Y = Y[...,:3]
+			black_frame = np.ones_like(Y[0]) * data['black_level'][:3][None,None]
 		for i in range(data['N']):
 			# Skip images where > 90% of the pixels are saturated
 			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size or data['exp'][i] > 10:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
 				estimate[i] = False
-			elif (Y[i] >= black_frame).sum() < 0.6*Y[i].size:
+			elif (Y[i] >= black_frame).sum() < 0.55*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to noise')
 				estimate[i] = False
 		data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,

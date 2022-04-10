@@ -2,7 +2,7 @@ import numpy as np, logging, HDRutils, gc
 from tqdm import trange
 
 from scipy.sparse import csr_matrix, diags
-from scipy.sparse.linalg import lsqr
+from scipy.sparse.linalg import lsmr
 
 import matplotlib.pyplot as plt
 from gfxdisp import pfs
@@ -33,6 +33,9 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2)) \
 				  if metadata['raw_format'] else metadata['black_level']
 
+	if imgs.ndim == 4:
+		assert imgs.shape[-1] == 3 or imgs[...,3].all() == 0
+		black_frame = np.ones_like(imgs[0]) * metadata['black_level'][:3][None,None]
 	Y = np.maximum(imgs - black_frame, 1e-6)	# Add epsilon since we need log(Y)
 	if invert_gamma:
 		max_value = np.iinfo(metadata['dtype']).max
@@ -75,6 +78,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		num_rows = rows.shape[0]
 		data = np.ones(num_rows)
 		O = csr_matrix((data, (rows, cols)), shape=(num_rows, (num_exp - 1)))
+		exp = lsmr(diags(W) @ O, W * m)[0]
 
 	elif method == 'gfxdisp':
 		logger.info(f'Estimate using logarithmic linear system with noise model')
@@ -107,7 +111,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				mask = np.stack((Y[i] + black_frame < metadata['saturation_point'],
 								 Y[j] + black_frame < metadata['saturation_point'],
 								 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
-				weights = (1/(scaled_var[i] + scaled_var[j]) * mask).flatten()
+				weights = np.sqrt(1/(scaled_var[i] + scaled_var[j]) * mask).flatten()
 				if outlier in (('mst', 'batched_mst')):
 					selected = np.arange(num_pix)		# Needed for MST to preserve order
 				else:
@@ -119,12 +123,13 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				cnt += 1
 
 		O = csr_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_exp//2*num_pix, num_exp))
+		exp = lsmr(diags(W) @ O, W * m)[0]
 
 	if outlier == 'cerman':
 		err_prev = np.finfo(float).max
 		t = trange(1000, leave=False)
 		for i in t:
-			exp = lsqr(diags(W) @ O, W * m)[0]
+			exp = lsmr(diags(W) @ O, W * m)[0]
 			err = (W*(O @ exp - m))**2
 			selected = err < 3*err.mean()
 			W, m, O = W[selected], m[selected], O[selected]
@@ -133,6 +138,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			err_prev = err.mean()
 			t.set_description(f'loss={err.mean()}')
 			del err; gc.collect()
+		exp = lsmr(diags(W) @ O, W * m)[0]
 
 	elif outlier == 'ransac':
 		assert method == 'gfxdisp'
@@ -146,7 +152,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		t = trange(1000, leave=False)
 		for i in t:
 			np.random.shuffle(selected)
-			exp_i = lsqr(WO[selected], Wm[selected])[0]
+			exp_i = lsmr(WO[selected], Wm[selected])[0]
 			exp_i = np.exp(exp_i - exp_i.max()) * exif_exp.max()
 			reject = np.maximum(exp_i/exif_exp, exif_exp/exp_i) > 3
 			exp_i[reject] = exif_exp[reject]
@@ -155,6 +161,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				loss = err
 				exp = np.log(exp_i)
 				t.set_description(f'loss={err}; i={i}')
+		exp = lsmr(diags(W) @ O, W * m)[0]
 
 	elif outlier == 'mst':
 		assert method == 'gfxdisp'
@@ -182,7 +189,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		err_prev = np.finfo(float).max
 		t = trange(1000, leave=False)
 		for i in t:
-			exp = lsqr(diags(W) @ O, W * m)[0]
+			exp = lsmr(diags(W) @ O, W * m)[0]
 			err = (W*(O @ exp - m))**2
 			selected = err < 3*err.mean()
 			W, m, O = W[selected], m[selected], O[selected]
@@ -190,6 +197,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				break
 			err_prev = err.mean()
 			t.set_description(f'loss={err.mean()}')
+		exp = lsmr(diags(W) @ O, W * m)[0]
 
 	elif outlier == 'batched_mst':
 		assert method == 'gfxdisp'
@@ -223,19 +231,19 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		
 		# TODO: Retain MSTs while removing outliers
 		# Remove outliers
-		err_prev = np.finfo(float).max
-		t = trange(1000, leave=False)
-		for i in t:
-			exp = lsqr(diags(W) @ O, W * m)[0]
-			err = (W*(O @ exp - m))**2
-			selected = err < 3*err.mean()
-			W, m, O = W[selected], m[selected], O[selected]
-			if err.mean() < 1e-6 or err_prev - err.mean() < 1e-6:
-				break
-			err_prev = err.mean()
-			t.set_description(f'loss={err.mean()}')
+		# err_prev = np.finfo(float).max
+		# t = trange(1000, leave=False)
+		# for i in t:
+		# 	exp = lsmr(diags(W) @ O, W * m, x0=np.log(exif_exp), damp=1)[0]
+		# 	err = (W*(O @ exp - m))**2
+		# 	selected = err < 3*err.mean()
+		# 	W, m, O = W[selected], m[selected], O[selected]
+		# 	if err.mean() < 1e-6 or err_prev - err.mean() < 1e-6:
+		# 		break
+		# 	err_prev = err.mean()
+		# 	t.set_description(f'loss={err.mean()}')
+		exp = lsmr(diags(W) @ O, W * m, x0=np.log(exif_exp), damp=1)[0]
 
-	exp = lsqr(diags(W) @ O, W * m)[0]
 	if method == 'cerman':
 		exp = np.append(exp, exif_exp[-1])
 		for e in range(num_exp - 2, -1, -1):
@@ -246,8 +254,8 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	logger.warning(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times')
 	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
 	exp[reject] = exif_exp[reject]
-	if reject.any():
-		logger.warning(f'Exposure estimation failed {reject}. Try using more pixels')
+	# if reject.any():
+	# 	logger.warning(f'Exposure estimation failed {reject}. Try using more pixels')
 	gc.collect()
 	return exp
 

@@ -108,6 +108,7 @@ def get_unsaturated(raw=None, saturation_threshold=None, img=None, saturation_th
 	:sat_percent: Saturation offset from reported white-point
 	:return: Boolean unsaturated mask
 	"""
+	# return (raw < saturation_threshold).all(axis=-1)
 	if raw is not None:
 		unsaturated = np.logical_and.reduce((raw[0::2,0::2] < saturation_threshold,
 											 raw[1::2,0::2] < saturation_threshold,

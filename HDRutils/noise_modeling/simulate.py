@@ -132,8 +132,8 @@ class NormalNoise(NoiseModel):
 		var = self.var(img, make, model, iso, disable_static_noise)
 		noise = np.random.normal(scale=np.sqrt(var))
 
-		dtype = np.uint8 if bits <= 8 else np.uint16
-		max_value = 2**bits - 1
+		dtype = np.uint8 if self.bits <= 8 else np.uint16
+		max_value = 2**self.bits - 1
 		quantized = ((img + noise + black_level/max_value).clip(0, 1)*max_value).astype(dtype)
 		return quantized
 

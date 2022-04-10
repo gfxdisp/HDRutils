@@ -25,13 +25,12 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	:cam: Camera noise parameters for better estimation
 	:return: Corrected exposure times
 	"""
-	assert method in ('gfxdisp', 'cerman')
+	assert method in ('gfxdisp', 'cerman', 'batched_mst')
 	num_exp = len(imgs)
 	assert num_exp > 1, 'Files not found or are invalid'
 
 	# Mask out saturated and noisy pixels
-	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2)) \
-				  if metadata['raw_format'] else metadata['black_level']
+	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2))
 
 	if imgs.ndim == 4:
 		assert imgs.shape[-1] == 3 or imgs[...,3].all() == 0
@@ -40,6 +39,10 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	if invert_gamma:
 		max_value = np.iinfo(metadata['dtype']).max
 		Y = (Y / max_value)**(invert_gamma) * max_value
+
+	num_pix = int(np.ceil(metadata['h']/4)*np.ceil(metadata['w']/4))	# Use green channel at reduced resolution
+	black_frame = black_frame[::4,1::4]
+	Y = (Y[:,::4,1::4] + Y[:,1::4,::4])/2
 
 	if method == 'cerman':
 		'''
@@ -80,22 +83,16 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		O = csr_matrix((data, (rows, cols)), shape=(num_rows, (num_exp - 1)))
 		exp = lsmr(diags(W) @ O, W * m)[0]
 
-	elif method == 'gfxdisp':
-		logger.info(f'Estimate using logarithmic linear system with noise model')
-		# num_pix = metadata['h']*metadata['w']
-		# if outlier not in (('mst', 'batched_mst')):
-		# 	num_pix = int(percentile/100*num_pix)
-		num_pix = int(np.ceil(metadata['h']/4)*np.ceil(metadata['w']/4))	# Use green channel
-		black_frame = black_frame[::4,1::4]
-		Y = (Y[:,::4,1::4] + Y[:,1::4,::4])/2
-		
+	elif method in ('gfxdisp', 'batched_mst'):
+		logger.info(f'Estimate using logarithmic linear system with noise model')		
 		# If noise parameters is provided, retrieve variances, else use simplified model
 		L = np.log(Y)
-		if cam == 'test':
-			cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
-			scaled_var = np.sqrt(2)*np.stack([(cam.var(y)/y**2) if cam else 1/y**2 for y in Y/(2**cam.bits - 1)])
-		else:
+		if not cam:
 			scaled_var = np.sqrt(2)/Y
+		else:
+			if cam == 'test':
+				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
+			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)**2
 
 		# Construct logarithmic sparse linear system W.O.e = W.m
 		logger.info(f'Constructing sparse matrix (O) and vector (m) using {num_pix} pixels')
@@ -123,7 +120,38 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				cnt += 1
 
 		O = csr_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_exp//2*num_pix, num_exp))
-		exp = lsmr(diags(W) @ O, W * m)[0]
+
+		if method == 'batched_mst':
+			cnt = 0
+			edges = np.zeros((num_pix, (num_exp - 1)*num_exp//2, 3))
+			for i in range(num_exp - 1):
+				for j in range(i + 1, num_exp):
+					edges[:,cnt,0] = W[cnt*num_pix:(cnt + 1)*num_pix]
+					edges[:,cnt,1] = i
+					edges[:,cnt,2] = j
+					cnt += 1
+			msts = kruskals_batched(edges, num_exp)
+			x, y = np.triu_indices(num_exp, k=1)
+			xx = x[None].repeat(num_pix, axis=0)
+			yy = y[None].repeat(num_pix, axis=0)
+			ww = np.zeros_like(xx)
+			ww[:] = np.arange(num_pix)[:,None]
+			mst_weights = np.convolve(edges[msts[ww, xx, yy],0], np.ones(num_exp), mode='valid')[::num_exp]
+			selected = msts[ww, xx, yy].transpose(1,0).flatten()
+			W, m, O = W[selected], m[selected], O[selected]
+			# selected = mst_weights != 0
+			# mst_weights = mst_weights[selected]
+			# selected = np.concatenate([selected]*num_exp)
+			# W, m, O = W[selected], m[selected], O[selected]
+
+			# idx = np.argsort(mst_weights)[-num_pix//10:]
+			# selected = np.concatenate([i*len(mst_weights) + idx for i in range(num_exp)])
+			# W, m, O = W[selected], m[selected], O[selected]
+			selected = W != 0
+			W, m, O = W[selected], m[selected], O[selected]
+			exp = lsmr(diags(W) @ O, W * m, x0=np.log(exif_exp), damp=1)[0]
+		else:
+			exp = lsmr(diags(W) @ O, W * m)[0]
 
 	if outlier == 'cerman':
 		err_prev = np.finfo(float).max
@@ -199,56 +227,11 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			t.set_description(f'loss={err.mean()}')
 		exp = lsmr(diags(W) @ O, W * m)[0]
 
-	elif outlier == 'batched_mst':
-		assert method == 'gfxdisp'
-		cnt = 0
-		edges = np.zeros((num_pix, (num_exp - 1)*num_exp//2, 3))
-		for i in range(num_exp - 1):
-			for j in range(i + 1, num_exp):
-				edges[:,cnt,0] = W[cnt*num_pix:(cnt + 1)*num_pix]
-				edges[:,cnt,1] = i
-				edges[:,cnt,2] = j
-				cnt += 1
-		msts = kruskals_batched(edges, num_exp)
-		x, y = np.triu_indices(num_exp, k=1)
-		xx = x[None].repeat(num_pix, axis=0)
-		yy = y[None].repeat(num_pix, axis=0)
-		ww = np.zeros_like(xx)
-		ww[:] = np.arange(num_pix)[:,None]
-		mst_weights = np.convolve(edges[msts[ww, xx, yy],0], np.ones(num_exp), mode='valid')[::num_exp]
-		selected = msts[ww, xx, yy].transpose(1,0).flatten()
-		W, m, O = W[selected], m[selected], O[selected]
-		# selected = mst_weights != 0
-		# mst_weights = mst_weights[selected]
-		# selected = np.concatenate([selected]*num_exp)
-		# W, m, O = W[selected], m[selected], O[selected]
-
-		# idx = np.argsort(mst_weights)[-num_pix//10:]
-		# selected = np.concatenate([i*len(mst_weights) + idx for i in range(num_exp)])
-		# W, m, O = W[selected], m[selected], O[selected]
-		selected = W != 0
-		W, m, O = W[selected], m[selected], O[selected]
-		
-		# TODO: Retain MSTs while removing outliers
-		# Remove outliers
-		# err_prev = np.finfo(float).max
-		# t = trange(1000, leave=False)
-		# for i in t:
-		# 	exp = lsmr(diags(W) @ O, W * m, x0=np.log(exif_exp), damp=1)[0]
-		# 	err = (W*(O @ exp - m))**2
-		# 	selected = err < 3*err.mean()
-		# 	W, m, O = W[selected], m[selected], O[selected]
-		# 	if err.mean() < 1e-6 or err_prev - err.mean() < 1e-6:
-		# 		break
-		# 	err_prev = err.mean()
-		# 	t.set_description(f'loss={err.mean()}')
-		exp = lsmr(diags(W) @ O, W * m, x0=np.log(exif_exp), damp=1)[0]
-
 	if method == 'cerman':
 		exp = np.append(exp, exif_exp[-1])
 		for e in range(num_exp - 2, -1, -1):
 			exp[e] = exif_exp[e+1]/exp[e]
-	elif method == 'gfxdisp':
+	elif method in ('gfxdisp', 'batched_mst'):
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.warning(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times')

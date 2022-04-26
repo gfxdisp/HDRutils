@@ -10,8 +10,8 @@ from gfxdisp import pfs
 logger = logging.getLogger(__name__)
 viewer = pfs.pfs()
 
-def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percentile=10,
-					   invert_gamma=False, cam='test', outlier='cerman'):
+def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percentile=10,
+					   invert_gamma=False, cam=None, outlier='cerman'):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
@@ -26,6 +26,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	:return: Corrected exposure times
 	"""
 	assert method in ('gfxdisp', 'cerman', 'batched_mst')
+	assert outlier in (None, 'ransac', 'cerman')
 	num_exp = len(imgs)
 	assert num_exp > 1, 'Files not found or are invalid'
 
@@ -40,7 +41,8 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		max_value = np.iinfo(metadata['dtype']).max
 		Y = (Y / max_value)**(invert_gamma) * max_value
 
-	num_pix = int(np.ceil(metadata['h']/4)*np.ceil(metadata['w']/4))	# Use green channel at reduced resolution
+	# Use green channel at reduced resolution
+	num_pix = int(np.ceil(metadata['h']/4))*int(np.ceil(metadata['w']/4))
 	black_frame = black_frame[::4,1::4]
 	Y = (Y[:,::4,1::4] + Y[:,1::4,::4])/2
 
@@ -53,8 +55,8 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		rows, cols, m, W = np.zeros((4, 0))
 		for i in range(num_exp - 1):
 			# Ensure images are sorted in increasing order of exposure time
-			assert all(e1 <= e2 for e1, e2 in zip(exif_exp[:-1], exif_exp[1:])), \
-				   'Please name the input files in increasing order of exposure time when sorted'
+			# assert all(e1 <= e2 for e1, e2 in zip(exif_exp[:-1], exif_exp[1:])), \
+			# 	   'Please name the input files in increasing order of exposure time when sorted'
 			im1, im2 = Y[i], Y[i+1]
 			mask = np.stack((im1 + black_frame < metadata['saturation_point'],
 							 im2 + black_frame < metadata['saturation_point'],
@@ -85,14 +87,15 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 
 	elif method in ('gfxdisp', 'batched_mst'):
 		logger.info(f'Estimate using logarithmic linear system with noise model')		
+
 		# If noise parameters is provided, retrieve variances, else use simplified model
 		L = np.log(Y)
 		if not cam:
-			scaled_var = np.sqrt(2)/Y
+			scaled_var = 1/Y
 		else:
 			if cam == 'test':
 				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
-			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)**2
+			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)
 
 		# Construct logarithmic sparse linear system W.O.e = W.m
 		logger.info(f'Constructing sparse matrix (O) and vector (m) using {num_pix} pixels')
@@ -191,42 +194,6 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				t.set_description(f'loss={err}; i={i}')
 		exp = lsmr(diags(W) @ O, W * m)[0]
 
-	elif outlier == 'mst':
-		assert method == 'gfxdisp'
-		# num_msts = num_pix//10
-		num_msts = num_pix
-		selected = []
-		best_wts = [i*num_pix + np.argsort(W[i*num_pix:(i + 1)*num_pix])[-num_msts:][::-1] for i in range(num_exp*(num_exp-1)//2)]
-		ptrs = np.zeros(num_exp*(num_exp-1)//2, dtype=int)
-		for _ in trange(num_msts):
-			candidates = np.zeros((num_exp - 1)*num_exp//2, dtype=int)
-			edges = np.zeros(((num_exp - 1)*num_exp//2, 3))
-			cnt = 0
-			for i in range(num_exp - 1):
-				for j in range(i + 1, num_exp):
-					candidates[cnt] = best_wts[cnt][ptrs[cnt]]
-					edges[cnt] = W[candidates[cnt]], i, j
-					cnt += 1
-			mst = kruskals(edges, num_exp)
-			mst = mst[np.triu_indices(num_exp, k=1)]
-			selected.extend(candidates[mst])
-			ptrs += mst.astype(int)
-
-		W, m, O = W[selected], m[selected], O[selected]
-		# Remove outliers
-		err_prev = np.finfo(float).max
-		t = trange(1000, leave=False)
-		for i in t:
-			exp = lsmr(diags(W) @ O, W * m)[0]
-			err = (W*(O @ exp - m))**2
-			selected = err < 3*err.mean()
-			W, m, O = W[selected], m[selected], O[selected]
-			if err.mean() < 1e-6 or err_prev - err.mean() < 1e-6:
-				break
-			err_prev = err.mean()
-			t.set_description(f'loss={err.mean()}')
-		exp = lsmr(diags(W) @ O, W * m)[0]
-
 	if method == 'cerman':
 		exp = np.append(exp, exif_exp[-1])
 		for e in range(num_exp - 2, -1, -1):
@@ -234,11 +201,11 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	elif method in ('gfxdisp', 'batched_mst'):
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
-	logger.warning(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times')
+	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times.')
 	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
 	exp[reject] = exif_exp[reject]
-	# if reject.any():
-	# 	logger.warning(f'Exposure estimation failed {reject}. Try using more pixels')
+	if reject.any():
+		logger.warning(f'Exposure estimation failed {reject}. Reverting back to EXIF data for these values.')
 	gc.collect()
 	return exp
 

@@ -54,7 +54,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 			Y = Y[...,:3]
 			black_frame = np.ones_like(Y[0]) * data['black_level'][:3][None,None]
 		for i in range(data['N']):
-			# Skip images where > 90% of the pixels are saturated
+			# Skip images where > 90% of the pixels are overexposed or underexposed
 			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size or data['exp'][i] > 10:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
 				estimate[i] = False

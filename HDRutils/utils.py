@@ -2,8 +2,7 @@ import logging
 from fractions import Fraction
 import exifread
 
-import numpy as np, cv2
-import rawpy
+import numpy as np, rawpy
 
 import HDRutils.io as io
 
@@ -177,6 +176,7 @@ def align(ref, target, warped, downsample=None):
 	"""
 	logger = logging.getLogger('align')
 	logger.info('Aligning images using homography')
+	import cv2
 	h, w = ref.shape[:2]
 	if downsample:
 		assert downsample > 1

@@ -13,15 +13,17 @@ If you prefer cloning this repository, install the dependencies using pip:
     cd HDRutils
     pip install -e .
 
-### Additional dependency
+### Additional dependencies
 You will need the [FreeImage plugin](https://imageio.readthedocs.io/en/stable/format_exr-fi.html) for reading and writing OpenEXR images:
 
     imageio_download_bin freeimage
 
-## Usage
-Just import HDRutils and call the required functions
+To capture HDR stacks using a DSLR, you will need gphoto2:
 
-### Reading and writing
+    sudo apt install gphoto2
+
+
+## Reading and writing
 Simple wrapper functions for [imageio's](https://imageio.github.io/) `imread` and `imwrite` are provided to set appropriate flags for HDR data. You can even call `imread` on RAW file formats:
 
 ```python
@@ -37,11 +39,21 @@ HDRutils.imwrite('rgb.png', img_RGB)
 HDRutils.imwrite('output_filename.exr', img)
 ```
 
-### Merge input images
+## Capture
+Make sure gphoto2 is installed. Additionally, set camera to **manual mode** and **disable autofocus** on the lens. Then, decide valid exposure times (by scrolling on the camera) and run:
+
+```python
+from HDRutils.capture import DSLR
+camera = DSLR(ext='.arw')
+exposures = ['10', '1', '1/10', '1/100']
+camera.capture_HDR_stack('image', exposures)
+```
+
+## Merge input images
 The [rawpy](https://github.com/letmaik/rawpy) wrapper is used to read RAW images. [Noise-aware merging](https://www.cl.cam.ac.uk/research/rainbow/projects/noise_aware_merging/) is performed using the Poisson-noise optimal estimator. The generated HDR image is linearly related to the scene radiance
 
 ```python
-files = ['file1.dng', 'file2.dng', 'file3.dng']		# RAW input files
+files = ['`image_0.arw`', '`image_1.arw`', '`image_2.arw`']		# RAW input files
 HDR_img = HDRutils.merge(files)
 HDRutils.imwrite('merged.exr', HDR_img)
 ```
@@ -65,6 +77,7 @@ While merging, some ghosting artifacts an be removed by setting `HDRutils.merge(
 Exposure metadata from EXIF may be inaccurate. The default behaviour is to estimate relative exposures directly from the image stack by solving a linear least squares problem. If you are confident that metadata is correct, disable exposure estimation by specifying `HDRutils.merge(..., estimate_exp=False)`.
 
 For robustness, the estimation includes an iterative outlier removal procedure which may take a couple of minutes to converge especially for large images and deep stacks. You can override this by `HDRutils.merge(..., outlier=None)`. For best results, supply the exact camera (instance of `HDRutils.NormalNoise`). Otherwise a default camera that works reasonably well for tested images will be used.
+
 
 ## Citation
 If you find this package useful, please cite

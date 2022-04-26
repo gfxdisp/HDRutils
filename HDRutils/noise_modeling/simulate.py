@@ -124,8 +124,7 @@ class NormalNoise(NoiseModel):
 		return var
 
 
-	def simulate(self, phi, exp, iso=None, make=None, model=None, disable_static_noise=False, bits=8, black_level=0):
-		assert bits <= 16
+	def simulate(self, phi, exp, iso=None, make=None, model=None, disable_static_noise=False, black_level=0):
 		t = float(exp)
 
 		img = phi * t * self.g

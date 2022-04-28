@@ -10,7 +10,7 @@ from gfxdisp import pfs
 logger = logging.getLogger(__name__)
 viewer = pfs.pfs()
 
-def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percentile=10,
+def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percentile=10,
 					   invert_gamma=False, cam=None, outlier='cerman'):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
@@ -83,7 +83,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percenti
 		num_rows = rows.shape[0]
 		data = np.ones(num_rows)
 		O = csr_matrix((data, (rows, cols)), shape=(num_rows, (num_exp - 1)))
-		exp = lsmr(diags(W) @ O, W * m)[0]
+		argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
 
 	elif method in ('gfxdisp', 'batched_mst'):
 		logger.info(f'Estimate using logarithmic linear system with noise model')		
@@ -142,25 +142,22 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percenti
 			mst_weights = np.convolve(edges[msts[ww, xx, yy],0], np.ones(num_exp), mode='valid')[::num_exp]
 			selected = msts[ww, xx, yy].transpose(1,0).flatten()
 			W, m, O = W[selected], m[selected], O[selected]
-			# selected = mst_weights != 0
-			# mst_weights = mst_weights[selected]
-			# selected = np.concatenate([selected]*num_exp)
-			# W, m, O = W[selected], m[selected], O[selected]
 
-			# idx = np.argsort(mst_weights)[-num_pix//10:]
-			# selected = np.concatenate([i*len(mst_weights) + idx for i in range(num_exp)])
-			# W, m, O = W[selected], m[selected], O[selected]
+			# TODO: Faster way to pick top % (no need to sort)
+			idx = np.argsort(mst_weights)[-int(num_pix*percentile/100):]
+			selected = np.concatenate([i*len(mst_weights) + idx for i in range(num_exp)])
+			W, m, O = W[selected], m[selected], O[selected]
 			selected = W != 0
 			W, m, O = W[selected], m[selected], O[selected]
-			exp = lsmr(diags(W) @ O, W * m, x0=np.log(exif_exp), damp=1)[0]
+			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m, x0=np.log(init), damp=lmbda)[0]
 		else:
-			exp = lsmr(diags(W) @ O, W * m)[0]
+			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
 
 	if outlier == 'cerman':
 		err_prev = np.finfo(float).max
 		t = trange(1000, leave=False)
 		for i in t:
-			exp = lsmr(diags(W) @ O, W * m)[0]
+			exp = argmin(exif_exp, 1)
 			err = (W*(O @ exp - m))**2
 			selected = err < 3*err.mean()
 			W, m, O = W[selected], m[selected], O[selected]
@@ -169,10 +166,10 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percenti
 			err_prev = err.mean()
 			t.set_description(f'loss={err.mean()}')
 			del err; gc.collect()
-		exp = lsmr(diags(W) @ O, W * m)[0]
+		logger.info(f'Outliers removed {i} times.')
 
 	elif outlier == 'ransac':
-		assert method == 'gfxdisp'
+		assert method in ('gfxdisp', 'batched_mst')
 		num_rows = W.shape[0]
 		# Randomly select 10% of the data
 		selected = np.zeros(num_rows, dtype=bool)
@@ -192,7 +189,8 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percenti
 				loss = err
 				exp = np.log(exp_i)
 				t.set_description(f'loss={err}; i={i}')
-		exp = lsmr(diags(W) @ O, W * m)[0]
+		logger.info(f'Outliers removed {i} times.')
+	exp = argmin(exif_exp, 1)
 
 	if method == 'cerman':
 		exp = np.append(exp, exif_exp[-1])
@@ -201,7 +199,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=1, percenti
 	elif method in ('gfxdisp', 'batched_mst'):
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
-	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}. Outliers removed {i} times.')
+	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}.')
 	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
 	exp[reject] = exif_exp[reject]
 	if reject.any():

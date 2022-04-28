@@ -20,20 +20,27 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 	# Read exposure time, gain and aperture from EXIF data
 	data = dict()
 	data['N'] = len(files)
+	assert not exp or len(exp) == data['N'], 'Incorrect number of exposure times provided'
+	assert not gain or len(gain) == data['N'], 'Incorrect number of gains times provided'
+	assert not aperture or isinstance(aperture, int) or isinstance(aperture, float)
 
 	try:
 		data['exp'], data['gain'], data['aperture'] = np.empty((3, data['N']))
 		for i, file in enumerate(files):
 			with open(file, 'rb') as f:
 				tags = exifread.process_file(f)
-			if 'EXIF ExposureTime' in tags:
+			if exp:
+				data['exp'][i] = exp[i]
+			elif 'EXIF ExposureTime' in tags:
 				data['exp'][i] = np.float32(Fraction(tags['EXIF ExposureTime'].printable))
 			elif 'Image ExposureTime' in tags:
 				data['exp'][i] = float(Fraction(tags['Image ExposureTime'].printable))
 			else:
 				raise Exception(f'Unable to read exposure time for {file}. Check EXIF data.')
 
-			if 'EXIF ISOSpeedRatings' in tags:
+			if gain:
+				data['gain'][i] = gain[i]
+			elif 'EXIF ISOSpeedRatings' in tags:
 				data['gain'][i] = float(tags['EXIF ISOSpeedRatings'].printable)/100
 			elif 'Image ISOSpeedRatings' in tags:
 				data['gain'][i] = float(tags['Image ISOSpeedRatings'].printable)/100
@@ -41,9 +48,12 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 				raise Exception(f'Unable to read ISO. Check EXIF data for {file}.')
 
 			# Aperture formula from https://www.omnicalculator.com/physics/aperture-area
-			focal_length = float(Fraction(tags['EXIF FocalLength'].printable))
-			f_number = float(Fraction(tags['EXIF FNumber'].printable))
-			data['aperture'][i] = np.pi * (focal_length / 2 / f_number)**2
+			if aperture:
+				data['aperture'][i] = aperture
+			else:
+				focal_length = float(Fraction(tags['EXIF FocalLength'].printable))
+				f_number = float(Fraction(tags['EXIF FNumber'].printable))
+				data['aperture'][i] = np.pi * (focal_length / 2 / f_number)**2
 	except Exception:
 		# Manually populate metadata for non-RAW formats
 		assert exp is not None, 'Unable to read metada from file, please supply manually'

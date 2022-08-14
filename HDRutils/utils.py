@@ -1,6 +1,7 @@
 import logging
 from fractions import Fraction
 import exifread
+import cv2
 
 import numpy as np, rawpy
 
@@ -9,8 +10,7 @@ import HDRutils.io as io
 logger = logging.getLogger(__name__)
 
 
-def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp=None, gain=None,
-				 aperture=None):
+def get_metadata(files, exp, gain, aperture, color_space='sRGB', sat_percent=0.98, black_level=0):
 	"""
 	Get metadata from EXIF files and rawpy. If the image file contains no metadata, exposure
 	time, gain and aperture need to supplied explicitly.
@@ -20,16 +20,17 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 	# Read exposure time, gain and aperture from EXIF data
 	data = dict()
 	data['N'] = len(files)
-	assert not exp or len(exp) == data['N'], 'Incorrect number of exposure times provided'
-	assert not gain or len(gain) == data['N'], 'Incorrect number of gains times provided'
-	assert not aperture or isinstance(aperture, int) or isinstance(aperture, float)
+	assert exp is None or len(exp) == data['N'], 'Incorrect exposure times provided'
+	assert gain is None or len(gain) == data['N'], 'Incorrect gains times provided'
+	assert aperture is None or isinstance(aperture, int) or isinstance(aperture, float) \
+		   or len(aperture) == data['N']
 
 	try:
 		data['exp'], data['gain'], data['aperture'] = np.empty((3, data['N']))
 		for i, file in enumerate(files):
 			with open(file, 'rb') as f:
 				tags = exifread.process_file(f)
-			if exp:
+			if exp is not None:
 				data['exp'][i] = exp[i]
 			elif 'EXIF ExposureTime' in tags:
 				data['exp'][i] = np.float32(Fraction(tags['EXIF ExposureTime'].printable))
@@ -38,7 +39,7 @@ def get_metadata(files, color_space='sRGB', sat_percent=0.98, black_level=0, exp
 			else:
 				raise Exception(f'Unable to read exposure time for {file}. Check EXIF data.')
 
-			if gain:
+			if gain is not None:
 				data['gain'][i] = gain[i]
 			elif 'EXIF ISOSpeedRatings' in tags:
 				data['gain'][i] = float(tags['EXIF ISOSpeedRatings'].printable)/100

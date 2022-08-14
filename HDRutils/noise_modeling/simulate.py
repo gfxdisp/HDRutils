@@ -132,6 +132,7 @@ class NormalNoise(NoiseModel):
 		noise = np.random.normal(scale=np.sqrt(var))
 
 		dtype = np.uint8 if self.bits <= 8 else np.uint16
+		logger.info(f'Quantizing to type {dtype} since bit-depth is {self.bits}')
 		max_value = 2**self.bits - 1
 		quantized = ((img + noise + black_level/max_value).clip(0, 1)*max_value).astype(dtype)
 		return quantized

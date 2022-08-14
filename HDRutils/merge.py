@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
-		  exp=None, gain=None, aperture=None, estimate_exp='batched_mst', cam=None,
+		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
 		  perc=10, outlier='cerman'):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
@@ -37,7 +37,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:outlier: Iterative outlier removal. Pick 1 of [None, 'cerman', 'ransac']
 	:return: Merged FP32 HDR image
 	"""
-	data = get_metadata(files, color_space, saturation_percent, black_level, exp, gain, aperture)
+	data = get_metadata(files, exp, gain, aperture, color_space, saturation_percent, black_level)
 	if estimate_exp:
 		# TODO: Handle imamge stacks with varying gain and aperture
 		assert len(set(data['gain'])) == 1 and len(set(data['aperture'])) == 1
@@ -85,7 +85,9 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 
 	if normalize:
 		HDR = HDR / HDR.max()
-	return HDR.astype(np.float32)
+	shortest_exposure = np.argmin(data['exp'] * data['gain'] * data['aperture'])
+	shortest_sat = get_unsaturated(io.imread(files[shortest_exposure], libraw=False), data['saturation_point'])
+	return HDR.astype(np.float32), shortest_sat
 
 
 def imread_demosaic_merge(files, metadata, do_align, sat_percent):

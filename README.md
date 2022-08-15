@@ -54,7 +54,7 @@ The [rawpy](https://github.com/letmaik/rawpy) wrapper is used to read RAW images
 
 ```python
 files = ['`image_0.arw`', '`image_1.arw`', '`image_2.arw`']		# RAW input files
-HDR_img = HDRutils.merge(files)
+HDR_img = HDRutils.merge(files)[0]
 HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
@@ -65,7 +65,7 @@ If your camera provides RAW frames in a non-standard format, you can still merge
 
 ```python
 files = ['file1.png', 'file2.png', 'file3.png']     # PNG bayer input files
-HDR_img = HDRutils.merge(files, demosaic_first=False, color_space='raw')
+HDR_img = HDRutils.merge(files, demosaic_first=False, color_space='raw')[0]
 HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
@@ -74,10 +74,11 @@ While merging, some ghosting artifacts an be removed by setting `HDRutils.merge(
 
 
 ### Exposure estimation
-Exposure metadata from EXIF may be inaccurate. The default behaviour is to estimate relative exposures directly from the image stack by solving a linear least squares problem. If you are confident that metadata is correct, disable exposure estimation by specifying `HDRutils.merge(..., estimate_exp=False)`.
+<!-- Exposure metadata from EXIF may be inaccurate. The default behaviour is to estimate relative exposures directly from the image stack by solving a linear least squares problem. If you are confident that metadata is correct, disable exposure estimation by specifying `HDRutils.merge(..., estimate_exp=False)`.
 
 For robustness, the estimation includes an iterative outlier removal procedure which may take a couple of minutes to converge especially for large images and deep stacks. You can override this by `HDRutils.merge(..., outlier=None)`. For best results, supply the exact camera (instance of `HDRutils.NormalNoise`). Otherwise a default camera that works reasonably well for tested images will be used.
-
+ -->
+This experimental feauture is currently disabled by default, and EXIF values are used. To enable, please run `HDRutils.merge(..., estimate_exp=method)`. A brief desciption of implemented methods will be made avaliable soon.
 
 ## Citation
 If you find this package useful, please cite

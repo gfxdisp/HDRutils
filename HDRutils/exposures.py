@@ -1,14 +1,16 @@
 import numpy as np, logging, HDRutils, gc
+from math import log
 from tqdm import trange
 
 from scipy.sparse import csr_matrix, diags
 from scipy.sparse.linalg import lsmr
+from time import time
 
-import matplotlib.pyplot as plt
-from gfxdisp import pfs
+# np.set_printoptions(linewidth=np.inf)
+# np.set_printoptions(precision=2)
+# np.set_printoptions(suppress=True)
 
 logger = logging.getLogger(__name__)
-viewer = pfs.pfs()
 
 def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percentile=10,
 					   invert_gamma=False, cam=None, outlier='cerman'):
@@ -25,11 +27,12 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	:cam: Camera noise parameters for better estimation
 	:return: Corrected exposure times
 	"""
-	assert method in ('gfxdisp', 'cerman', 'batched_mst')
+	assert method in ('gfxdisp', 'cerman', 'batched_mst', 'quick')
 	assert outlier in (None, 'ransac', 'cerman')
 	num_exp = len(imgs)
 	assert num_exp > 1, 'Files not found or are invalid'
 
+	t = time()
 	# Mask out saturated and noisy pixels
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2))
 
@@ -42,9 +45,12 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		Y = (Y / max_value)**(invert_gamma) * max_value
 
 	# Use green channel at reduced resolution
-	num_pix = int(np.ceil(metadata['h']/4))*int(np.ceil(metadata['w']/4))
-	black_frame = black_frame[::4,1::4]
-	Y = (Y[:,::4,1::4] + Y[:,1::4,::4])/2
+	# num_pix = int(np.ceil(metadata['h']/4))*int(np.ceil(metadata['w']/4))
+	# black_frame = black_frame[::4,1::4]
+	# Y = (Y[:,::4,1::4] + Y[:,1::4,::4])/2
+	num_pix = int(np.ceil(metadata['h']/2))*int(np.ceil(metadata['w']/2))
+	black_frame = black_frame[::2,1::2]
+	Y = (Y[:,::2,1::2] + Y[:,1::2,::2])/2
 
 	if method == 'cerman':
 		'''
@@ -152,10 +158,113 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m, x0=np.log(init), damp=lmbda)[0]
 		else:
 			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
+	elif method == 'quick':
+		# If noise parameters is provided, retrieve variances, else use simplified model
+		if not cam:
+			scaled_var = 1/Y
+		else:
+			if cam == 'test':
+				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
+			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)
+
+		print(f'Start: {time() - t}')
+		start = time()
+		num_tiles = 33 	# Use (num_tiles)x(num_tiles) tiles; clip last few rows and cols
+		_, h, w = Y.shape
+		h = num_tiles * (h//num_tiles)
+		w = num_tiles * (w//num_tiles)
+		Y = Y[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose((0,1,3,2,4))
+		scaled_var = scaled_var[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4)
+		black_frame = black_frame[:h,:w].reshape(num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,2,1,3)
+
+		# Don't use saturated pixels
+		Y[Y + black_frame >= metadata['saturation_point']] = -1
+		cnt = 0
+		print(f'1: {time() - start}')
+		O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
+		W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
+		print(f'2: {time() - start}')
+		for ee in range(num_exp - 1, 0, -1):
+			cnt = 0
+			while cnt < num_tiles*num_tiles:
+				for ii in range(num_tiles):
+					if cnt == num_tiles*num_tiles: break
+					for jj in range(num_tiles):
+						if cnt == num_tiles*num_tiles: break
+						if Y[ee,ii,jj].max() < 0: continue
+						r, c = np.unravel_index(Y[ee,ii,jj].flatten().argmax(), Y.shape[-2:])
+						# for ff in range(ee - 1, -1, -1):
+						ff = ee - 1
+						if Y[ff,ii,jj,r,c] > -1:
+							O[ee-1, cnt, ee] = 1
+							O[ee-1, cnt, ff] = -1
+							m[ee-1, cnt] = log(Y[ee,ii,jj,r,c]/Y[ff,ii,jj,r,c])
+							W[ee-1, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
+							Y[ee,ii,jj,r,c] = -1
+							cnt += 1
+							# break
+		# for ee in range(num_exp - 1):
+		# 	cnt = 0
+		# 	while cnt < num_tiles*num_tiles:
+		# 		for ii in range(num_tiles):
+		# 			if cnt == num_tiles*num_tiles: break
+		# 			for jj in range(num_tiles):
+		# 				if cnt == num_tiles*num_tiles: break
+		# 				# if Y[ee,ii,jj].max() < 0: continue
+		# 				r, c = np.unravel_index(Y[ee,ii,jj].flatten().argmax(), Y.shape[-2:])
+		# 				for ff in range(num_exp - 1, ee, -1):
+		# 				# for ff in range(ee + 1, num_exp):
+		# 					if Y[ff,ii,jj,r,c] > 0:
+		# 						O[ee, cnt, ee] = -1
+		# 						O[ee, cnt, ff] = 1
+		# 						m[ee, cnt] = log(Y[ff,ii,jj,r,c]/Y[ee,ii,jj,r,c])
+		# 						W[ee, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
+		# 						Y[ee,ii,jj,r,c] = -1
+		# 						cnt += 1
+		# 						break
+		# 				Y[ee,ii,jj,r,c] = -1
+		print(f'3: {time() - start}')
+
+		# Y = Y[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4).reshape(num_exp, num_tiles*num_tiles, -1)
+		# L = np.log(Y)
+		# scaled_var = scaled_var[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4).reshape(num_exp, num_tiles*num_tiles, -1)
+		# black_frame = black_frame[:h,:w].reshape(num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,2,1,3).reshape(num_tiles*num_tiles, -1)
+
+		# # Don't use saturated pixels
+		# # TODO: noise floor
+		# Y[Y + black_frame >= metadata['saturation_point']] = -1
+		# O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
+		# W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
+
+		# # Vectorized tile max
+		# loc = Y.argmax(axis=-1)
+		# t = time()
+		# for ee in range(num_exp-1, 0, -1):
+		# 	unfilled = np.ones(num_tiles*num_tiles, dtype=bool)
+		# 	valid = Y[:, np.arange(num_tiles*num_tiles), loc[ee]] > 0
+		# 	for ff in range(ee-1, -1, -1):
+		# 		# unfilled = np.logical_and(unfilled, Y[ff, np.arange(num_tiles*num_tiles), loc[ee]] <= 0)
+		# 		mask = np.logical_and.reduce((unfilled, valid[ee], valid[ff]))
+		# 		unfilled = np.logical_and(unfilled, np.logical_not(valid[ff]))
+		# 		O[ee-1, mask, ee] = 1
+		# 		O[ee-1, mask, ff] = -1
+		# 		m[ee-1, mask] = (L[ee, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]] - L[ff, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]])
+		# 		W[ee-1, mask] = 1/(scaled_var[ee, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]] + scaled_var[ff, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]])
+		# 		# if np.logical_or(np.logical_not(unfilled), np.logical_not(valid[ee])).all():
+		# 		if np.logical_not(np.logical_and(valid[ee], unfilled)).all():
+		# 			break
+		# 	num_valid = num_tiles*num_tiles - np.logical_or(np.logical_not(valid[ee]), unfilled).sum()
+		# 	W[ee-1] = W[ee-1]*(num_tiles*num_tiles/num_valid)**2
+
+		O = O.reshape((num_exp-1)*num_tiles*num_tiles, num_exp)
+		m, W = m.flatten(), W.flatten()
+		# O, m, W = O[W != 0], m[W != 0], W[W != 0]
+		argmin = lambda init, lmbda: np.linalg.inv(O.T @ np.diag(W) @ O + lmbda*np.eye(num_exp)) @ \
+									 (O.T @ np.diag(W) @ m + lmbda*np.log(init))
 
 	if outlier == 'cerman':
 		err_prev = np.finfo(float).max
-		t = trange(1000, leave=False)
+		t = trange(100, leave=False)
 		for i in t:
 			exp = argmin(exif_exp, 1)
 			err = (W*(O @ exp - m))**2
@@ -191,12 +300,13 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				t.set_description(f'loss={err}; i={i}')
 		logger.info(f'Outliers removed {i} times.')
 	exp = argmin(exif_exp, 1)
+	print(f'4: {time() - start}')
 
 	if method == 'cerman':
 		exp = np.append(exp, exif_exp[-1])
 		for e in range(num_exp - 2, -1, -1):
 			exp[e] = exif_exp[e+1]/exp[e]
-	elif method in ('gfxdisp', 'batched_mst'):
+	elif method in ('gfxdisp', 'batched_mst', 'quick'):
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}.')

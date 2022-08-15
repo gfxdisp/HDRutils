@@ -86,8 +86,8 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if normalize:
 		HDR = HDR / HDR.max()
 	shortest_exposure = np.argmin(data['exp'] * data['gain'] * data['aperture'])
-	shortest_sat = get_unsaturated(io.imread(files[shortest_exposure], libraw=False), data['saturation_point'])
-	return HDR.astype(np.float32), shortest_sat
+	unsaturated = get_unsaturated(io.imread(files[shortest_exposure], libraw=False), data['saturation_point'])
+	return HDR.astype(np.float32), unsaturated
 
 
 def imread_demosaic_merge(files, metadata, do_align, sat_percent):

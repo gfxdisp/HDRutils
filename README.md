@@ -14,11 +14,11 @@ If you prefer cloning this repository, install the dependencies using pip:
     pip install -e .
 
 ### Additional dependencies
-You will need the [FreeImage plugin](https://imageio.readthedocs.io/en/stable/format_exr-fi.html) for reading and writing OpenEXR images:
+You will need the [FreeImage plugin](https://imageio.readthedocs.io/en/stable/_autosummary/imageio.plugins.freeimage.html) for reading and writing OpenEXR images:
 
     imageio_download_bin freeimage
 
-To capture HDR stacks using a DSLR, you will need gphoto2:
+If you wish to capture HDR stacks using a DSLR, you will need gphoto2:
 
     sudo apt install gphoto2
 
@@ -50,7 +50,7 @@ camera.capture_HDR_stack('image', exposures)
 ```
 
 ## Merge input images
-The [rawpy](https://github.com/letmaik/rawpy) wrapper is used to read RAW images. [Noise-aware merging](https://www.cl.cam.ac.uk/research/rainbow/projects/noise_aware_merging/) is performed using the Poisson-noise optimal estimator. The generated HDR image is linearly related to the scene radiance
+The [rawpy](https://github.com/letmaik/rawpy) wrapper is used to read RAW images. [Noise-aware merging](https://www.cl.cam.ac.uk/research/rainbow/projects/noise-aware-merging/) is performed using the Poisson-noise optimal estimator. The generated HDR image is linearly related to the scene radiance
 
 ```python
 files = ['`image_0.arw`', '`image_1.arw`', '`image_2.arw`']		# RAW input files
@@ -58,7 +58,17 @@ HDR_img = HDRutils.merge(files)[0]
 HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
-The default function processes each image individually using [libraw](https://www.libraw.org/) and then merges the RGB images. This behaviour can be overriden to merge RAW bayer image by setting the flag `demosaic_first=False`.
+Sometimes the shortest exposure may contain saturated pixels. These cause artifacts when manual white-balance/color calibration is performed. Thus, `HDRutils.merge()` returns an unsaturated mask in addition to the merged image. The saturated pixels can be clipped after manual white-balance/color calibration.
+
+### Merge and demosaic or demosaic and merge?
+The default function processes each image individually using [libraw](https://www.libraw.org/) and then merges the RGB images. This result relies on the robust camera pipeline (including black-level subtraction, demosaicing, white-balance) provided by libraw, and should be suitable for most projects.
+
+If you need finer control over the exact radiance values, this behaviour can be overriden to merge RAW bayer images by setting the flag `demosaic_first=False`. This mode is useful when the camera is custom-calibrated and you have an exact correspondance between camera pixels with the scene luminance and/or color. Moreover, saturated pixels can be precisely identified before demosaicing. In this mode, a basic camera pipeline is reproduced with the following steps:
+
+Subtract black level -> Merge image stack -> Color transformation -> White-balance
+
+Demosaicing algorithms that are currently supported can be found at [this page](https://colour-demosaicing.readthedocs.io/en/latest/colour_demosaicing.bayer.html). Change the algorithm using `HDRutils.merge(..., demosaic_first=False, demosaic=*algorithm*)`
+
 
 ### Merge RAW bayer frames from non-RAW formats
 If your camera provides RAW frames in a non-standard format, you can still merge them in the camera color-space without libraw processing
@@ -70,7 +80,7 @@ HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
 ### Alignment
-While merging, some ghosting artifacts an be removed by setting `HDRutils.merge(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes.
+While merging, some ghosting artifacts can be removed by setting `HDRutils.merge(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes. Unfortunately non-rigid motion requiring dense optical flow is not yet implemented.
 
 
 ### Exposure estimation

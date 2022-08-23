@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
-		  perc=10, outlier='cerman'):
+		  outlier='cerman', demosaic='bilinear', clip_highlights=False):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -33,9 +33,11 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:aperture: Aperture required when metadata is not present
 	:estimate_exp: Estimate exposure times by solving a system. Pick 1 of ['gfxdisp','cerman']
 	:cam: Camera noise model for exposure estimation
-	:perc: Estimate exposures using min-variance rows
 	:outlier: Iterative outlier removal. Pick 1 of [None, 'cerman', 'ransac']
-	:return: Merged FP32 HDR image
+	:demosaic: Demosaicing algorithm if "demosaic_first" is False. Pick 1 of ['bilinear', 'malvar', 'menon']
+	:clip_highlights: Clip pixels that are saturated in the lowest exposure
+
+	:return: Merged FP32 HDR image, mask of unsaturated pixels
 	"""
 	data = get_metadata(files, exp, gain, aperture, color_space, saturation_percent, black_level)
 	if estimate_exp:
@@ -67,12 +69,13 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
 	else:
-		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern)
+		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic)
 
 	if num_sat > 0:
 		logger.warning(f'{num_sat/(data["h"]*data["w"]):.3f}% of pixels (n={num_sat}) are ' \
 					   'saturated in the shortest exposure. The values for these pixels will ' \
-					   'be inaccurate.')
+					   'be inaccurate. If there color artifacts in the final HDR image, ' \
+					   'consider setting the option \'clip_highlights\'=True')
 
 	if wb == 'camera':
 		wb = data['white_balance'][:3]
@@ -81,16 +84,19 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 		HDR = HDR * np.array(wb)[None,None,:]
 	if HDR.min() < 0:
 		logger.info('Clipping negative pixels.')
-		HDR[HDR < 0] = 0
+		HDR = HDR.clip(min=0)
 
 	if normalize:
 		HDR = HDR / HDR.max()
 	shortest_exposure = np.argmin(data['exp'] * data['gain'] * data['aperture'])
 	unsaturated = get_unsaturated(io.imread(files[shortest_exposure], libraw=False), data['saturation_point'])
+	if clip_highlights:
+		logger.info(f'Clipping all saturated highlights to {HDR.max()}')
+		HDR[np.logical_not(unsaturated)] = HDR.max()
 	return HDR.astype(np.float32), unsaturated
 
 
-def imread_demosaic_merge(files, metadata, do_align, sat_percent):
+def imread_demosaic_merge(files, metadata, do_align, sat_percent, demosaic):
 	"""
 	First postprocess using libraw and then merge RGB images. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -139,11 +145,15 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	return HDR, num_sat
 
 
-def imread_merge_demosaic(files, metadata, do_align, pattern):
+def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 	"""
+	supported_demosaic = ('bilinear', 'malvar', 'menon')
+	assert demosaic in supported_demosaic, f'Unknown demosaicing method {demosaic}. ' \
+		'Pick one of {supported_demosaic}. For more information, please see ' \
+		'https://colour-demosaicing.readthedocs.io/en/latest/colour_demosaicing.bayer.html'
 	if do_align:
 		ref_idx = np.argsort(metadata['exp'] * metadata['gain']
 							 * metadata['aperture'])[len(files)//2]
@@ -221,8 +231,15 @@ def imread_merge_demosaic(files, metadata, do_align, pattern):
 
 	# Libraw does not support 32-bit values. Use colour-demosaicing instead:
 	# https://colour-demosaicing.readthedocs.io/en/latest/manual.html
-	logger.info('Running bilinear demosaicing')
-	HDR = cd.demosaicing_CFA_Bayer_bilinear(HDR_bayer, pattern=pattern)
+	if demosaic == 'bilinear':
+		logger.info('Running bilinear demosaicing')
+		HDR = cd.demosaicing_CFA_Bayer_bilinear(HDR_bayer, pattern=pattern)
+	elif demosaic == 'malvar':
+		logger.info('Running Malvar (2004) demosaicing')
+		HDR = cd.demosaicing_CFA_Bayer_Malvar2004(HDR_bayer, pattern=pattern)
+	elif demosaic == 'menon':
+		logger.info('Running DDFPAD by Menon (2007)')
+		HDR = cd.demosaicing_CFA_Bayer_Menon2007(HDR_bayer, pattern=pattern)
 
 	# Convert to output color-space
 	logger.info(f'Using color matrix: {color_mat}')

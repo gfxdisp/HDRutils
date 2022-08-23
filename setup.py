@@ -13,7 +13,7 @@ setup(
   author = 'Param Hanji',
   author_email = 'param.hanji@gmail.com',
   url = 'https://github.com/gfxdisp/HDRutils',
-  download_url = 'https://github.com/gfxdisp/HDRutils/archive/v0.9.tar.gz',
+  download_url = 'https://github.com/gfxdisp/HDRutils/archive/v0.10.tar.gz',
   keywords = ['HDR', 'Merging', 'Deghosting', 'simulation'],
   install_requires=[
           'numpy',

@@ -4,7 +4,6 @@ from tqdm import trange
 
 from scipy.sparse import csr_matrix, diags
 from scipy.sparse.linalg import lsmr
-from time import time
 
 # np.set_printoptions(linewidth=np.inf)
 # np.set_printoptions(precision=2)
@@ -32,7 +31,6 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	num_exp = len(imgs)
 	assert num_exp > 1, 'Files not found or are invalid'
 
-	t = time()
 	# Mask out saturated and noisy pixels
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2))
 
@@ -45,12 +43,9 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		Y = (Y / max_value)**(invert_gamma) * max_value
 
 	# Use green channel at reduced resolution
-	# num_pix = int(np.ceil(metadata['h']/4))*int(np.ceil(metadata['w']/4))
-	# black_frame = black_frame[::4,1::4]
-	# Y = (Y[:,::4,1::4] + Y[:,1::4,::4])/2
 	num_pix = int(np.ceil(metadata['h']/2))*int(np.ceil(metadata['w']/2))
 	black_frame = black_frame[::2,1::2]
-	Y = (Y[:,::2,1::2] + Y[:,1::2,::2])/2
+	Y = Y[:,::2,1::2]
 
 	if method == 'cerman':
 		'''
@@ -167,8 +162,6 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
 			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)
 
-		print(f'Start: {time() - t}')
-		start = time()
 		num_tiles = 33 	# Use (num_tiles)x(num_tiles) tiles; clip last few rows and cols
 		_, h, w = Y.shape
 		h = num_tiles * (h//num_tiles)
@@ -180,10 +173,8 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		# Don't use saturated pixels
 		Y[Y + black_frame >= metadata['saturation_point']] = -1
 		cnt = 0
-		print(f'1: {time() - start}')
 		O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
 		W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
-		print(f'2: {time() - start}')
 		for ee in range(num_exp - 1, 0, -1):
 			cnt = 0
 			while cnt < num_tiles*num_tiles:
@@ -203,58 +194,6 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 							Y[ee,ii,jj,r,c] = -1
 							cnt += 1
 							# break
-		# for ee in range(num_exp - 1):
-		# 	cnt = 0
-		# 	while cnt < num_tiles*num_tiles:
-		# 		for ii in range(num_tiles):
-		# 			if cnt == num_tiles*num_tiles: break
-		# 			for jj in range(num_tiles):
-		# 				if cnt == num_tiles*num_tiles: break
-		# 				# if Y[ee,ii,jj].max() < 0: continue
-		# 				r, c = np.unravel_index(Y[ee,ii,jj].flatten().argmax(), Y.shape[-2:])
-		# 				for ff in range(num_exp - 1, ee, -1):
-		# 				# for ff in range(ee + 1, num_exp):
-		# 					if Y[ff,ii,jj,r,c] > 0:
-		# 						O[ee, cnt, ee] = -1
-		# 						O[ee, cnt, ff] = 1
-		# 						m[ee, cnt] = log(Y[ff,ii,jj,r,c]/Y[ee,ii,jj,r,c])
-		# 						W[ee, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
-		# 						Y[ee,ii,jj,r,c] = -1
-		# 						cnt += 1
-		# 						break
-		# 				Y[ee,ii,jj,r,c] = -1
-		print(f'3: {time() - start}')
-
-		# Y = Y[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4).reshape(num_exp, num_tiles*num_tiles, -1)
-		# L = np.log(Y)
-		# scaled_var = scaled_var[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4).reshape(num_exp, num_tiles*num_tiles, -1)
-		# black_frame = black_frame[:h,:w].reshape(num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,2,1,3).reshape(num_tiles*num_tiles, -1)
-
-		# # Don't use saturated pixels
-		# # TODO: noise floor
-		# Y[Y + black_frame >= metadata['saturation_point']] = -1
-		# O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
-		# W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
-
-		# # Vectorized tile max
-		# loc = Y.argmax(axis=-1)
-		# t = time()
-		# for ee in range(num_exp-1, 0, -1):
-		# 	unfilled = np.ones(num_tiles*num_tiles, dtype=bool)
-		# 	valid = Y[:, np.arange(num_tiles*num_tiles), loc[ee]] > 0
-		# 	for ff in range(ee-1, -1, -1):
-		# 		# unfilled = np.logical_and(unfilled, Y[ff, np.arange(num_tiles*num_tiles), loc[ee]] <= 0)
-		# 		mask = np.logical_and.reduce((unfilled, valid[ee], valid[ff]))
-		# 		unfilled = np.logical_and(unfilled, np.logical_not(valid[ff]))
-		# 		O[ee-1, mask, ee] = 1
-		# 		O[ee-1, mask, ff] = -1
-		# 		m[ee-1, mask] = (L[ee, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]] - L[ff, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]])
-		# 		W[ee-1, mask] = 1/(scaled_var[ee, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]] + scaled_var[ff, np.arange(num_tiles*num_tiles)[mask], loc[ee, mask]])
-		# 		# if np.logical_or(np.logical_not(unfilled), np.logical_not(valid[ee])).all():
-		# 		if np.logical_not(np.logical_and(valid[ee], unfilled)).all():
-		# 			break
-		# 	num_valid = num_tiles*num_tiles - np.logical_or(np.logical_not(valid[ee]), unfilled).sum()
-		# 	W[ee-1] = W[ee-1]*(num_tiles*num_tiles/num_valid)**2
 
 		O = O.reshape((num_exp-1)*num_tiles*num_tiles, num_exp)
 		m, W = m.flatten(), W.flatten()
@@ -266,7 +205,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		err_prev = np.finfo(float).max
 		t = trange(100, leave=False)
 		for i in t:
-			exp = argmin(exif_exp, 1)
+			exp = argmin(exif_exp, 10)
 			err = (W*(O @ exp - m))**2
 			selected = err < 3*err.mean()
 			W, m, O = W[selected], m[selected], O[selected]
@@ -277,30 +216,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			del err; gc.collect()
 		logger.info(f'Outliers removed {i} times.')
 
-	elif outlier == 'ransac':
-		assert method in ('gfxdisp', 'batched_mst')
-		num_rows = W.shape[0]
-		# Randomly select 10% of the data
-		selected = np.zeros(num_rows, dtype=bool)
-		selected[:num_rows//10] = True
-		loss = np.finfo(float).max
-		WO = diags(W) @ O
-		Wm = W*m
-		t = trange(1000, leave=False)
-		for i in t:
-			np.random.shuffle(selected)
-			exp_i = lsmr(WO[selected], Wm[selected])[0]
-			exp_i = np.exp(exp_i - exp_i.max()) * exif_exp.max()
-			reject = np.maximum(exp_i/exif_exp, exif_exp/exp_i) > 3
-			exp_i[reject] = exif_exp[reject]
-			err = ((W*(O @ exp_i - m))**2).sum()
-			if err < loss:
-				loss = err
-				exp = np.log(exp_i)
-				t.set_description(f'loss={err}; i={i}')
-		logger.info(f'Outliers removed {i} times.')
-	exp = argmin(exif_exp, 1)
-	print(f'4: {time() - start}')
+	exp = argmin(exif_exp, 10)
 
 	if method == 'cerman':
 		exp = np.append(exp, exif_exp[-1])
@@ -310,11 +226,10 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}.')
-	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 3
+	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 2
 	exp[reject] = exif_exp[reject]
 	if reject.any():
 		logger.warning(f'Exposure estimation failed {reject}. Reverting back to EXIF data for these values.')
-	gc.collect()
 	return exp
 
 

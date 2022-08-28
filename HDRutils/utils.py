@@ -10,7 +10,7 @@ import HDRutils.io as io
 logger = logging.getLogger(__name__)
 
 
-def get_metadata(files, exp, gain, aperture, color_space='sRGB', sat_percent=0.98, black_level=0):
+def get_metadata(files, exp, gain, aperture, color_space='sRGB', sat_percent=0.98, black_level=0, bits=None):
 	"""
 	Get metadata from EXIF files and rawpy. If the image file contains no metadata, exposure
 	time, gain and aperture need to supplied explicitly.
@@ -82,12 +82,17 @@ def get_metadata(files, exp, gain, aperture, color_space='sRGB', sat_percent=0.9
 		data['dtype'] = img.dtype
 		assert len(img.shape) == 2, 'Provided files should not be demosaiced'
 		data['h'], data['w'] = img.shape
-		if img.dtype == np.float32:
-			data['saturation_point'] = img.max()
-		elif img.dtype == np.uint16:
-			data['saturation_point'] = 2**16 - 1
-		elif img.dtype == np.uint8:
-			data['saturation_point'] = 2**8 - 1
+		if bits is None:
+			if img.dtype == np.float32:
+				assert img.max() <= 1, 'For FP images, values should be in [0,1]'
+				bits = 1
+			elif img.dtype == np.uint16:
+				bits = 16
+				data['saturation_point'] = 2**16 - 1
+			elif img.dtype == np.uint8:
+				bits = 8
+				data['saturation_point'] = 2**8 - 1
+		data['saturation_point'] = 2**bits - 1
 		shortest_exposure = np.argmin(data['exp'] * data['gain'] * data['aperture'])
 		img = io.imread(files[shortest_exposure])
 		data['black_level'] = np.array([black_level]*4)

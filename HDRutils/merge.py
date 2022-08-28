@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
-		  outlier='cerman', demosaic='bilinear', clip_highlights=False):
+		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -36,10 +36,11 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:outlier: Iterative outlier removal. Pick 1 of [None, 'cerman', 'ransac']
 	:demosaic: Demosaicing algorithm if "demosaic_first" is False. Pick 1 of ['bilinear', 'malvar', 'menon']
 	:clip_highlights: Clip pixels that are saturated in the lowest exposure
+	:bits: Number of quantization bits for simulated data
 
 	:return: Merged FP32 HDR image, mask of unsaturated pixels
 	"""
-	data = get_metadata(files, exp, gain, aperture, color_space, saturation_percent, black_level)
+	data = get_metadata(files, exp, gain, aperture, color_space, saturation_percent, black_level, bits)
 	if estimate_exp:
 		# TODO: Handle imamge stacks with varying gain and aperture
 		assert len(set(data['gain'])) == 1 and len(set(data['aperture'])) == 1

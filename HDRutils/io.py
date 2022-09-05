@@ -1,6 +1,6 @@
 import logging
 import numpy as np
-import imageio as io, rawpy
+import imageio.v3 as io, rawpy, pyexr
 
 logger = logging.getLogger(__name__)
 
@@ -45,21 +45,30 @@ def imread(file, libraw=True, color_space='srgb', wb='camera'):
 		# Raw formats may be optionally processed with libraw
 		raw = rawpy.imread(file)
 		if libraw:
-			return imread_libraw(raw, color_space)
+			img = imread_libraw(raw, color_space)
 		else:
-			return raw.raw_image_visible
+			img = raw.raw_image_visible
 	else:
 		# Imagio imread should handle most formats
 		if file.lower().endswith(ldr_ext):
 			logger.info('LDR image file format provided')
 			if file.lower().endswith('.png'):
 				# 16-bit pngs require an additional flag
-				return io.imread(file, format='PNG-FI')
+				img = io.imread(file, plugin='PNG-FI')
 		elif file.lower().endswith(hdr_ext):
 			logger.info('HDR image file format provided')
+			if file.lower().endswith('.exr'):
+				# Imagio's exr is inaccuarate
+				# See https://github.com/imageio/imageio/issues/517
+				precisions = pyexr.open(file).precisions
+				assert precisions.count(precisions[0]) == len(precisions), 'All channels must have same precision'
+				img = pyexr.read(file, precision=precisions[0])
+			elif file.lower().endswith('.hdr'):
+				img = io.imread(file)
 		else:
 			logger.warning('Unknown image file format. Reverting to imageio imread')
-		return io.imread(file)
+			img = io.imread(file)
+	return img
 
 
 def imwrite(file, img):
@@ -74,16 +83,23 @@ def imwrite(file, img):
 		logger.info(f'LDR image provided, it is encoded using {img.dtype}')
 		if file.endswith('.png'):
 			# 16-bit pngs require an additional flag
-			io.imwrite(file, img, format='PNG-FI')
+			io.imwrite(file, img, plugin='PNG-FI')
 			written = True
 	elif img.dtype in (np.float32, np.float64, np.float128):
-		if file.endswith(('.exr', '.hdr')):
+		if file.endswith('.hdr'):
 			# Imegio needs an additional flag to prevent clipping to (2**16 - 1)
-			io.imwrite(file, img.astype(np.float32), flags=0x0001)
+			io.imwrite(file, img.astype(np.float32))
+			written = True
+		elif file.endswith('.exr'):
+			pyexr.write(file, img.astype(np.float32))
 			written = True
 	elif img.dtype == np.float16:
-		if file.endswith(('.exr', '.hdr')):
+		if file.endswith('.hdr'):
+			logger.warning('Cannot write float16 to .hdr, converting to float32')
 			io.imwrite(file, img.astype(np.float32))
+			written = True
+		elif file.endswith('.exr'):
+			pyexr.write(file, img, precision=pyexr.HALF)
 			written = True
 	if not written:
 		logger.warning('Unknown extension/datatype. Reverting to imageio imwrite')

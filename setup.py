@@ -23,7 +23,7 @@ setup(
   keywords = ['HDR', 'Merging', 'Deghosting', 'simulation'],
   install_requires=[
           'numpy',
-          'imageio==2.9.0',
+          'imageio>=2.10.1',
           'rawpy',
           'exifread',
           'tqdm',
@@ -31,7 +31,8 @@ setup(
           'matplotlib',
           'opencv_python',
           'scipy==1.7.1',
-          'scikit-image==0.18.3'],
+          'scikit-image==0.18.3',
+          'pyexr'],
   classifiers=[
     'Development Status :: 3 - Alpha',
     'Intended Audience :: Developers',

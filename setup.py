@@ -29,7 +29,6 @@ setup(
           'tqdm',
           'colour-demosaicing',
           'matplotlib',
-          'opencv_python',
           'scipy==1.7.1',
           'scikit-image==0.18.3',
           'pyexr'],

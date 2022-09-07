@@ -1,4 +1,4 @@
-import numpy as np, logging, HDRutils, gc
+import numpy as np, logging, HDRutils
 from math import log
 from tqdm import trange
 
@@ -249,7 +249,6 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				break
 			err_prev = err.mean()
 			t.set_description(f'loss={err.mean()}')
-			del err; gc.collect()
 		logger.info(f'Outliers removed {i} times.')
 
 	exp = argmin(exif_exp, 10)

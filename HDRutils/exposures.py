@@ -19,17 +19,20 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 	:imgs: Image stack
 	:exif_exp: Exposure times read from image metadata
 	:metadata: Internal camera metadata dictionary
-	:method: Pick from ['gfxdisp', 'cerman']
+	:method: Pick from ['cerman', 'batched_mst', 'mst', 'quick']
 	:noise_floor: All pixels smaller than this will be ignored
 	:percentile: Use a small percentage of the least noisy pixels for the estimation
 	:invert_gamma: If the images are gamma correct invert to work with linear values
 	:cam: Camera noise parameters for better estimation
+	:outlier: Pick from [None, 'cerman']
+
 	:return: Corrected exposure times
 	"""
-	assert method in ('gfxdisp', 'cerman', 'batched_mst', 'quick')
-	assert outlier in (None, 'ransac', 'cerman')
+	assert method in ('mst', 'cerman', 'batched_mst', 'quick')
+	assert outlier in (None, 'cerman')
 	num_exp = len(imgs)
 	assert num_exp > 1, 'Files not found or are invalid'
+	reject = np.zeros(num_exp, dtype=bool)
 
 	# Mask out saturated and noisy pixels
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2))
@@ -86,7 +89,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		O = csr_matrix((data, (rows, cols)), shape=(num_rows, (num_exp - 1)))
 		argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
 
-	elif method in ('gfxdisp', 'batched_mst'):
+	elif method == 'batched_mst':
 		logger.info(f'Estimate using logarithmic linear system with noise model')		
 
 		# If noise parameters is provided, retrieve variances, else use simplified model
@@ -113,10 +116,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 								 Y[j] + black_frame < metadata['saturation_point'],
 								 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
 				weights = np.sqrt(1/(scaled_var[i] + scaled_var[j]) * mask).flatten()
-				if outlier in (('mst', 'batched_mst')):
-					selected = np.arange(num_pix)		# Needed for MST to preserve order
-				else:
-					selected = np.argsort(weights)[-num_pix:]
+				selected = np.argsort(weights)[-num_pix:]
 				W[cnt*num_pix:(cnt + 1)*num_pix] = weights[selected]
 				m[cnt*num_pix:(cnt + 1)*num_pix] = (L[i] - L[j]).flatten()[selected]
 				cols[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] = i
@@ -153,7 +153,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m, x0=np.log(init), damp=lmbda)[0]
 		else:
 			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
-	elif method == 'quick':
+	elif method in ('mst', 'quick'):
 		# If noise parameters is provided, retrieve variances, else use simplified model
 		if not cam:
 			scaled_var = 1/Y
@@ -162,7 +162,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
 			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)
 
-		num_tiles = 33 	# Use (num_tiles)x(num_tiles) tiles; clip last few rows and cols
+		num_tiles = 10 	# Use (num_tiles)x(num_tiles) tiles; clip last few rows and cols
 		_, h, w = Y.shape
 		h = num_tiles * (h//num_tiles)
 		w = num_tiles * (w//num_tiles)
@@ -170,34 +170,70 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		scaled_var = scaled_var[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4)
 		black_frame = black_frame[:h,:w].reshape(num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,2,1,3)
 
-		# Don't use saturated pixels
+		# Don't use saturated or noisy pixels
 		Y[Y + black_frame >= metadata['saturation_point']] = -1
-		cnt = 0
-		O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
-		W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
-		for ee in range(num_exp - 1, 0, -1):
-			cnt = 0
-			while cnt < num_tiles*num_tiles:
-				for ii in range(num_tiles):
-					if cnt == num_tiles*num_tiles: break
-					for jj in range(num_tiles):
-						if cnt == num_tiles*num_tiles: break
-						if Y[ee,ii,jj].max() < 0: continue
-						r, c = np.unravel_index(Y[ee,ii,jj].flatten().argmax(), Y.shape[-2:])
-						# for ff in range(ee - 1, -1, -1):
-						ff = ee - 1
-						if Y[ff,ii,jj,r,c] > -1:
-							O[ee-1, cnt, ee] = 1
-							O[ee-1, cnt, ff] = -1
-							m[ee-1, cnt] = log(Y[ee,ii,jj,r,c]/Y[ff,ii,jj,r,c])
-							W[ee-1, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
-							Y[ee,ii,jj,r,c] = -1
-							cnt += 1
-							# break
+		Y[Y <= noise_floor] = -1
 
-		O = O.reshape((num_exp-1)*num_tiles*num_tiles, num_exp)
-		m, W = m.flatten(), W.flatten()
-		# O, m, W = O[W != 0], m[W != 0], W[W != 0]
+		if method == 'quick':
+			cnt = 0
+			O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
+			W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
+			for ee in range(num_exp - 1, 0, -1):
+				cnt = 0
+				while cnt < num_tiles*num_tiles:
+					update = False
+					for ii in range(num_tiles):
+						if cnt == num_tiles*num_tiles: break
+						for jj in range(num_tiles):
+							if cnt == num_tiles*num_tiles: break
+							if Y[ee,ii,jj].max() < 0: continue
+							r, c = np.unravel_index(Y[ee,ii,jj].flatten().argmax(), Y.shape[-2:])
+							# for ff in range(ee - 1, -1, -1):
+							ff = ee - 1
+							if Y[ff,ii,jj,r,c] > -1:
+								O[ee-1, cnt, ee] = 1
+								O[ee-1, cnt, ff] = -1
+								m[ee-1, cnt] = log(Y[ee,ii,jj,r,c]/Y[ff,ii,jj,r,c])
+								W[ee-1, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
+								Y[ee,ii,jj,r,c] = -1
+								cnt += 1
+								update = True
+								# break
+					if not update:
+						logger.error(f'Can not align exposure {ee-1}; too few well-exposed pixels found')
+						reject[ee-1] = True
+						W[ee-1] = 0
+						break
+			O = O.reshape((num_exp-1)*num_tiles*num_tiles, num_exp)
+			m, W = m.flatten(), W.flatten()
+			O, m, W = O[W != 0], m[W != 0], W[W != 0]
+		elif method == 'mst':
+			num_msts = 50
+			W, O, m = [], [], []
+			for ii in range(num_tiles):
+				for jj in range(num_tiles):
+					thresholds = np.sort(Y[1:,ii,jj].reshape(num_exp-1, -1))[:,-num_msts]
+					valid = np.logical_and(Y[1:,ii,jj] > thresholds[:,None,None], Y[:-1,ii,jj] > -1)
+					num_selected = min(valid.sum(axis=(-1,-2)))
+					if num_selected == 0: continue
+					# W.append(1/(scaled_var[:-1,ii,jj][valid] + scaled_var[1:,ii,jj][valid]))
+					# m.append(np.log(Y[1:,ii,jj][valid]/Y[:-1,ii,jj][valid]))
+
+					# Balance all exposures
+					# idx = np.argsort(W[-1])[-num_selected:]
+					# W[-1], m[-1] = W[-1][idx], m[-1][idx]
+					# O.append(np.zeros((num_selected, num_exp)))
+					for ee in range(num_exp-1):
+						W.append(1/(scaled_var[ee,ii,jj][valid[ee]] + scaled_var[ee+1,ii,jj][valid[ee]]))
+						m.append(np.log(Y[ee+1,ii,jj][valid[ee]]/Y[ee,ii,jj][valid[ee]]))
+						idx = np.argsort(W[-1])[-num_selected:]
+						W[-1], m[-1] = W[-1][idx], m[-1][idx]
+						O.append(np.zeros((num_selected, num_exp)))
+						O[-1][:,ee] = -1
+						O[-1][:,ee+1] = 1
+			del Y, black_frame, imgs, scaled_var, valid, thresholds
+			W, O, m = [np.concatenate(a, dtype=np.float32) for a in (W, O, m)]
+
 		argmin = lambda init, lmbda: np.linalg.inv(O.T @ np.diag(W) @ O + lmbda*np.eye(num_exp)) @ \
 									 (O.T @ np.diag(W) @ m + lmbda*np.log(init))
 
@@ -222,11 +258,11 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		exp = np.append(exp, exif_exp[-1])
 		for e in range(num_exp - 2, -1, -1):
 			exp[e] = exif_exp[e+1]/exp[e]
-	elif method in ('gfxdisp', 'batched_mst', 'quick'):
+	elif method in ('mst', 'batched_mst', 'quick'):
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}.')
-	reject = np.maximum(exp/exif_exp, exif_exp/exp) > 2
+	reject = np.logical_or(reject, np.maximum(exp/exif_exp, exif_exp/exp) > 3)
 	exp[reject] = exif_exp[reject]
 	if reject.any():
 		logger.warning(f'Exposure estimation failed {reject}. Reverting back to EXIF data for these values.')

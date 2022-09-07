@@ -1,7 +1,6 @@
 import logging
 from fractions import Fraction
 import exifread
-import cv2
 
 import numpy as np, rawpy
 
@@ -166,17 +165,6 @@ def encode(im1, im2):
 
 	return enc1.astype(np.uint8), enc2.astype(np.uint8)
 
-def find_homography(kp1, kp2, matches):
-	matched_kp1 = np.zeros((len(matches), 1, 2), dtype=np.float32)
-	matched_kp2 = np.zeros((len(matches), 1, 2), dtype=np.float32)
-
-	for i in range(len(matches)):
-		matched_kp1[i] = kp1[matches[i].queryIdx].pt
-		matched_kp2[i] = kp2[matches[i].trainIdx].pt
-
-	homography, _ = cv2.findHomography(matched_kp1, matched_kp2, cv2.RANSAC, 1)
-
-	return homography
 
 def align(ref, target, warped, downsample=None):
 	"""
@@ -228,7 +216,16 @@ def align(ref, target, warped, downsample=None):
 
 	# img = cv2.drawMatches(enc_target, kp, enc_ref, kp_ref, matches, None)
 
-	H = find_homography(kp, kp_ref, matches)
+	matched_kp1 = np.zeros((len(matches), 1, 2), dtype=np.float32)
+	matched_kp2 = np.zeros((len(matches), 1, 2), dtype=np.float32)
+
+	for i in range(len(matches)):
+		matched_kp1[i] = kp[matches[i].queryIdx].pt
+		matched_kp2[i] = kp_ref[matches[i].trainIdx].pt
+
+	H, _ = cv2.findHomography(matched_kp1, matched_kp2, cv2.RANSAC, 1)
+
+
 	if H.max() > 1000:
 		logger.warning('Large value detected in homography. Estimation may have failed.')
 	logger.info(f'Estimated homography: {H}')

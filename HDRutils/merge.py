@@ -1,8 +1,6 @@
 import logging, tqdm
 
 import numpy as np
-import rawpy
-import colour_demosaicing as cd
 
 import HDRutils.io as io
 from HDRutils.utils import *
@@ -61,11 +59,12 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size or data['exp'][i] > 10:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
 				estimate[i] = False
-			elif (Y[i] >= black_frame).sum() < 0.55*Y[i].size:
+			elif (Y[i] - black_frame <= data['saturation_point']/1000).sum() > 0.95*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to noise')
 				estimate[i] = False
 		data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
-												   estimate_exp, cam=cam, outlier=outlier)
+												   estimate_exp, cam=cam, outlier=outlier,
+												   noise_floor=data['saturation_point']/1000)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
@@ -97,7 +96,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	return HDR.astype(np.float32), unsaturated
 
 
-def imread_demosaic_merge(files, metadata, do_align, sat_percent, demosaic):
+def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	"""
 	First postprocess using libraw and then merge RGB images. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -151,6 +150,9 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic):
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
 	"""
+	import rawpy
+	import colour_demosaicing as cd
+
 	supported_demosaic = ('bilinear', 'malvar', 'menon')
 	assert demosaic in supported_demosaic, f'Unknown demosaicing method {demosaic}. ' \
 		'Pick one of {supported_demosaic}. For more information, please see ' \

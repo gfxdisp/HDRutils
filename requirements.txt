@@ -1,7 +1,7 @@
 opencv_python==4.5.1.48
 ExifRead==2.3.2
 tqdm==4.56.0
-imageio==2.9.0
+imageio==2.21.2
 rawpy==0.16.0
 matplotlib==3.3.3
 numpy==1.19.5

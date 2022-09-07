@@ -23,7 +23,7 @@ setup(
   keywords = ['HDR', 'Merging', 'Deghosting', 'simulation'],
   install_requires=[
           'numpy',
-          'imageio>=2.10.1',
+          'imageio>=2.21.2',
           'rawpy',
           'exifread',
           'tqdm',

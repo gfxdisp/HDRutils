@@ -69,8 +69,12 @@ def get_metadata(files, exp, gain, aperture, color_space='sRGB', sat_percent=0.9
 		data['raw_format'] = True
 		data['h'], data['w'] = raw.postprocess(user_flip=0).shape[:2]
 		data['black_level'] = np.array(raw.black_level_per_channel)
+
 		# For some cameras, the provided white_level is incorrect
-		data['saturation_point'] = raw.white_level*sat_percent
+		# TODO: per-channel saturation point
+		long_img = rawpy.imread(files[-1]).raw_image_visible
+		data['saturation_point'] = min(long_img[::2,::2].max(), long_img[::2,1::2].max(), long_img[1::2,::2].max(), long_img[1::2,1::2].max()) - 1
+
 		assert raw.camera_whitebalance[1] == raw.camera_whitebalance[3] or raw.camera_whitebalance[3] == 0, \
 			   'Cannot figure out camera white_balance values'
 		data['white_balance'] = raw.camera_whitebalance[:3]

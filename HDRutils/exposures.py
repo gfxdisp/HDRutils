@@ -215,7 +215,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 					thresholds = np.sort(Y[1:,ii,jj].reshape(num_exp-1, -1))[:,-num_msts]
 					valid = np.logical_and(Y[1:,ii,jj] > thresholds[:,None,None], Y[:-1,ii,jj] > -1)
 					num_selected = min(valid.sum(axis=(-1,-2)))
-					if num_selected == 0: continue
+					if num_selected == 0 or thresholds.min() < noise_floor*10: continue		# Skip frames that are mostly noisy
 					# W.append(1/(scaled_var[:-1,ii,jj][valid] + scaled_var[1:,ii,jj][valid]))
 					# m.append(np.log(Y[1:,ii,jj][valid]/Y[:-1,ii,jj][valid]))
 

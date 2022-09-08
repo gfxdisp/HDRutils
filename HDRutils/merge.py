@@ -77,7 +77,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 					   'be inaccurate. If there color artifacts in the final HDR image, ' \
 					   'consider setting the option \'clip_highlights\'=True')
 
-	if wb == 'camera':
+	if isinstance(wb, str) and wb == 'camera':
 		wb = data['white_balance'][:3]
 	if wb is not None:
 		assert len(wb) == 3, 'Provide list [R G B] corresponding to white patch in the image'

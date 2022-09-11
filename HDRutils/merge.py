@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
-		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None):
+		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, ols=False):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -55,16 +55,17 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 			Y = Y[...,:3]
 			black_frame = np.ones_like(Y[0]) * data['black_level'][:3][None,None]
 		for i in range(data['N']):
-			# Skip images where > 90% of the pixels are overexposed or underexposed
-			if (Y[i] >= data['saturation_point']).sum() > 0.9*Y[i].size or data['exp'][i] > 10:
+			# Skip images where > 95% of the pixels are overexposed or underexposed
+			noise_floor = data['saturation_point']/1000
+			if (Y[i] >= data['saturation_point']).sum() > 0.95*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
 				estimate[i] = False
-			elif (Y[i] - black_frame <= data['saturation_point']/1000).sum() > 0.95*Y[i].size:
+			elif (Y[i] - black_frame <= noise_floor).sum() > 0.95*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to noise')
 				estimate[i] = False
 		data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
 												   estimate_exp, cam=cam, outlier=outlier,
-												   noise_floor=data['saturation_point']/1000)
+												   noise_floor=noise_floor, ols=ols)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
@@ -247,5 +248,6 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic):
 	# Convert to output color-space
 	logger.info(f'Using color matrix: {color_mat}')
 	HDR = HDR @ color_mat
+	HDR = metadata['libraw_scale'](HDR)
 
 	return HDR, num_sat

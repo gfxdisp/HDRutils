@@ -85,7 +85,7 @@ def imwrite(file, img):
 			# 16-bit pngs require an additional flag
 			io.imwrite(file, img, plugin='PNG-FI')
 			written = True
-	elif img.dtype in (np.float32, np.float64, np.float128):
+	elif img.dtype in (np.float32, np.float64):
 		if file.endswith('.hdr'):
 			# Imegio needs an additional flag to prevent clipping to (2**16 - 1)
 			io.imwrite(file, img.astype(np.float32))

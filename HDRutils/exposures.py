@@ -1,5 +1,6 @@
-import numpy as np, logging, HDRutils
-from math import log
+import numpy as np, math
+import logging
+import HDRutils
 from tqdm import trange
 
 from scipy.sparse import csr_matrix, diags
@@ -12,7 +13,7 @@ from scipy.sparse.linalg import lsmr
 logger = logging.getLogger(__name__)
 
 def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percentile=10,
-					   invert_gamma=False, cam=None, outlier='cerman'):
+					   invert_gamma=False, cam=None, outlier=None, ols=False):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
@@ -166,9 +167,9 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		_, h, w = Y.shape
 		h = num_tiles * (h//num_tiles)
 		w = num_tiles * (w//num_tiles)
-		Y = Y[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose((0,1,3,2,4))
-		scaled_var = scaled_var[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4)
-		black_frame = black_frame[:h,:w].reshape(num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,2,1,3)
+		Y = Y[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose((0,1,3,2,4)).astype(np.float32)
+		scaled_var = scaled_var[:,:h,:w].reshape(num_exp, num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,1,3,2,4).astype(np.float32)
+		black_frame = black_frame[:h,:w].reshape(num_tiles, h//num_tiles, num_tiles, w//num_tiles).transpose(0,2,1,3).astype(np.float32)
 
 		# Don't use saturated or noisy pixels
 		Y[Y + black_frame >= metadata['saturation_point']] = -1
@@ -193,7 +194,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 							if Y[ff,ii,jj,r,c] > -1:
 								O[ee-1, cnt, ee] = 1
 								O[ee-1, cnt, ff] = -1
-								m[ee-1, cnt] = log(Y[ee,ii,jj,r,c]/Y[ff,ii,jj,r,c])
+								m[ee-1, cnt] = math.log(Y[ee,ii,jj,r,c]/Y[ff,ii,jj,r,c])
 								W[ee-1, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
 								Y[ee,ii,jj,r,c] = -1
 								cnt += 1
@@ -209,30 +210,41 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 			O, m, W = O[W != 0], m[W != 0], W[W != 0]
 		elif method == 'mst':
 			num_msts = 50
+			# Determine how many MSTs to select
+			# This will be constant for all exposures for a given tile
+			thresholds = np.sort(Y[1:].reshape(num_exp-1, num_tiles, num_tiles, -1))[...,-num_msts]
+			valid = np.logical_and(Y[1:] > thresholds[...,None,None], Y[:-1] > -1)
+			num_selected = valid.sum(axis=(-1,-2)).min(axis=0)
+
+			# Skip frames that are mostly noisy
+			skip = np.logical_or(num_selected == 0, thresholds.min(axis=0) < noise_floor*5)
+			valid = valid * np.logical_not(skip).reshape(1, num_tiles, num_tiles, 1, 1)
+
+			# Set 0/0 to 0 instead of inf and log(-ve) to 0 instead of nan
+			div = lambda a,b: np.divide(a, b, out=np.zeros_like(b), where=b!=0)
+			log = lambda a: np.log(a, out=np.zeros_like(a), where=a>0)
+			weights = div(1, scaled_var[:-1]*valid + scaled_var[1:]*valid)#.reshape(num_exp-1, num_tiles, num_tiles, -1)
+			log_ratios = log(div(Y[1:], Y[:-1]))
+
+			# Stopped vectorized processing since each tile will have different contributions
+			# to the final linear system W.O.e = W.m
 			W, O, m = [], [], []
 			for ii in range(num_tiles):
 				for jj in range(num_tiles):
-					thresholds = np.sort(Y[1:,ii,jj].reshape(num_exp-1, -1))[:,-num_msts]
-					valid = np.logical_and(Y[1:,ii,jj] > thresholds[:,None,None], Y[:-1,ii,jj] > -1)
-					num_selected = min(valid.sum(axis=(-1,-2)))
-					if num_selected == 0 or thresholds.min() < noise_floor*10: continue		# Skip frames that are mostly noisy
-					# W.append(1/(scaled_var[:-1,ii,jj][valid] + scaled_var[1:,ii,jj][valid]))
-					# m.append(np.log(Y[1:,ii,jj][valid]/Y[:-1,ii,jj][valid]))
-
-					# Balance all exposures
-					# idx = np.argsort(W[-1])[-num_selected:]
-					# W[-1], m[-1] = W[-1][idx], m[-1][idx]
-					# O.append(np.zeros((num_selected, num_exp)))
+					if skip[ii,jj]: continue
+					O.append(np.zeros((num_selected[ii,jj]*(num_exp-1), num_exp), dtype=np.float32))
 					for ee in range(num_exp-1):
-						W.append(1/(scaled_var[ee,ii,jj][valid[ee]] + scaled_var[ee+1,ii,jj][valid[ee]]))
-						m.append(np.log(Y[ee+1,ii,jj][valid[ee]]/Y[ee,ii,jj][valid[ee]]))
-						idx = np.argsort(W[-1])[-num_selected:]
-						W[-1], m[-1] = W[-1][idx], m[-1][idx]
-						O.append(np.zeros((num_selected, num_exp)))
-						O[-1][:,ee] = -1
-						O[-1][:,ee+1] = 1
-			del Y, black_frame, imgs, scaled_var, valid, thresholds
-			W, O, m = [np.concatenate(a, dtype=np.float32) for a in (W, O, m)]
+						W.append(weights[ee,ii,jj,valid[ee,ii,jj]])
+						idx = np.argsort(W[-1])[-num_selected[ii,jj]:]
+						W[-1] = W[-1][idx]
+						m.append(log_ratios[ee,ii,jj,valid[ee,ii,jj]][idx])
+						O[-1][ee*num_selected[ii,jj]:(ee+1)*num_selected[ii,jj],ee] = -1
+						O[-1][ee*num_selected[ii,jj]:(ee+1)*num_selected[ii,jj],ee+1] = 1
+			if len(W) == 0:
+				logger.error(f'Exposure estimation failed. One or more of the frames are underexposed.')
+				return exif_exp
+			W, O, m = [np.concatenate(a) for a in (W, O, m)]
+			if ols: W[:] = 1
 
 		argmin = lambda init, lmbda: np.linalg.inv(O.T @ np.diag(W) @ O + lmbda*np.eye(num_exp)) @ \
 									 (O.T @ np.diag(W) @ m + lmbda*np.log(init))
@@ -261,7 +273,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}.')
-	reject = np.logical_or(reject, np.maximum(exp/exif_exp, exif_exp/exp) > 3)
+	reject = np.logical_or(reject, np.maximum(exp/exif_exp, exif_exp/exp) > 2)
 	exp[reject] = exif_exp[reject]
 	if reject.any():
 		logger.warning(f'Exposure estimation failed {reject}. Reverting back to EXIF data for these values.')

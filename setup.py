@@ -29,8 +29,8 @@ setup(
           'tqdm',
           'colour-demosaicing',
           'matplotlib',
-          'scipy==1.7.1',
-          'scikit-image==0.18.3',
+          'scipy>=1.7.1',
+          'scikit-image>=0.18.3',
           'pyexr'],
   classifiers=[
     'Development Status :: 3 - Alpha',

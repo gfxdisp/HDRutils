@@ -70,19 +70,24 @@ def get_metadata(files, exp, gain, aperture, color_space='sRGB', sat_percent=0.9
 		data['h'], data['w'] = raw.postprocess(user_flip=0).shape[:2]
 		data['black_level'] = np.array(raw.black_level_per_channel)
 
+		data['saturation_point'] = raw.white_level*sat_percent
+		# The below code leads to inconsistent images for videos and light fields
+		'''
 		# For some cameras, the provided white_level is incorrect
 		# TODO: per-channel saturation point
 		long_img = rawpy.imread(files[-1]).raw_image_visible
 		data['saturation_point'] = min(long_img[::2,::2].max(), long_img[::2,1::2].max(),
 									   long_img[1::2,::2].max(), long_img[1::2,1::2].max()
 									   )*sat_percent
+		'''
 
 		assert raw.camera_whitebalance[1] == raw.camera_whitebalance[3] or raw.camera_whitebalance[3] == 0, \
 			   'Cannot figure out camera white_balance values'
 		data['white_balance'] = raw.camera_whitebalance[:3]
 		# Guess the bit-depth
-		long_img = rawpy.imread(files[-1]).raw_image_visible
-		bits = int(np.log2(long_img.max()))
+		longest_exposure = np.argmax(data['exp'] * data['gain'] * data['aperture'])
+		long_img = rawpy.imread(files[longest_exposure]).raw_image
+		bits = int(np.ceil(np.log2(long_img.max())))
 		data['libraw_scale'] = lambda img: img/(2**bits-1)*(2**16-1)
 	except rawpy._rawpy.LibRawFileUnsupportedError:
 		data['raw_format'] = False

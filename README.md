@@ -1,6 +1,19 @@
 # HDRutils
 
-Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images. You can find a separate Readme describing some functinos for noise simulations [here](HDRutils/noise_modeling).
+Some utility functions to generate HDR images from a sequence of exposure time or gain modulated images. You can find a separate README describing some functinos for realistic noise simulations [here](HDRutils/noise_modeling).
+
+**Table of contents**
+- [Installation](#installation)
+    - [Additional dependencies](#additional-dependencies)
+- [HDR image I/O](#reading-and-writing)
+- [Capture](#multi-exposure-capture)
+- [HDR merge](#merge-input-images)
+    - [Demosaicing](#merge-and-demosaic-or-demosaic-and-merge)
+    - [RAW bayer input](#merge-raw-bayer-frames-from-non-raw-formats)
+    - [Alignment](#alignment)
+    - [Exposure estimation](#exposure-estimation)
+- [Noise simulation](#noise-simulation)
+- [Citation](#citation)
 
 ## Installation
 To download HDRUtils, use Pypi via pip:
@@ -39,7 +52,7 @@ HDRutils.imwrite('rgb.png', img_RGB)
 HDRutils.imwrite('output_filename.exr', img)
 ```
 
-## Capture
+## Multi-exposure capture
 Make sure gphoto2 is installed. Additionally, set camera to **manual mode** and **disable autofocus** on the lens. Then, decide valid exposure times (by scrolling on the camera) and run:
 
 ```python
@@ -84,14 +97,15 @@ While merging, some ghosting artifacts can be removed by setting `HDRutils.merge
 
 
 ### Exposure estimation
-<!-- Exposure metadata from EXIF may be inaccurate. The default behaviour is to estimate relative exposures directly from the image stack by solving a linear least squares problem. If you are confident that metadata is correct, disable exposure estimation by specifying `HDRutils.merge(..., estimate_exp=False)`.
+Exposure metadata from EXIF may be inaccurate and it may be benificial to estimate relative exposures directly from the image stack. Please see [our paper](https://www.cl.cam.ac.uk/research/rainbow/projects/exposure-estimation/) for details.
 
-For robustness, the estimation includes an iterative outlier removal procedure which may take a couple of minutes to converge especially for large images and deep stacks. You can override this by `HDRutils.merge(..., outlier=None)`. For best results, supply the exact camera (instance of `HDRutils.NormalNoise`). Otherwise a default camera that works reasonably well for tested images will be used.
- -->
-This experimental feauture is currently disabled by default, and EXIF values are used. To enable, please run `HDRutils.merge(..., estimate_exp=method)`. A brief desciption of implemented methods will be made avaliable soon.
+This feauture is currently disabled, and EXIF values are used by default. To enable exposure estimation, run `HDRutils.merge(..., estimate_exp='mst')`.
+
+## Noise simulation
+Generating realistic camera noise using calibrated parameters of real-world cameras is described [here](HDRutils/noise_modeling/).
 
 ## Citation
-If you find this package useful, please cite
+If you find this package useful, we would be grateful if you cite
 
     @inproceedings{hanji2020noise,
         author    = {Hanji, Param and Zhong, Fangcheng and Mantiuk, Rafa{\l} K.},
@@ -101,4 +115,16 @@ If you find this package useful, please cite
         publisher = {Springer},
         pages     = {376--391},
         url       = {http://www.cl.cam.ac.uk/research/rainbow/projects/noise-aware-merging/},
+    }
+
+    @ARTICLE{hanji2023exposures,
+        author    = {Hanji, Param and and Mantiuk, Rafa{\l} K.},
+        journal   = {IEEE Transactions on Computational Imaging}, 
+        title     = {Efficient Approximation of Jacobian Matrices Involving a Non-Uniform Fast Fourier Transform (NUFFT)}, 
+        year      = {2023},
+        volume    = {},
+        number    = {},
+        pages     = {},
+        doi       = {},
+        url       = {https://www.cl.cam.ac.uk/research/rainbow/projects/exposure-estimation/},
     }

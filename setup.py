@@ -11,7 +11,7 @@ setup(
   packages = find_packages(),
   package_data = {'HDRutils': ['noise_modeling/darktable.json']},
   include_package_data=True,
-  version = '0.10',
+  version = '1.0',
   license='MIT',
   description = 'Utility functions for performing basic operations on HDR images, including ' \
                 'merging and deghosting',

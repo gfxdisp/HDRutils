@@ -119,8 +119,8 @@ If you find this package useful, we would be grateful if you cite
 
     @ARTICLE{hanji2023exposures,
         author    = {Hanji, Param and and Mantiuk, Rafa{\l} K.},
-        journal   = {IEEE Transactions on Computational Imaging}, 
-        title     = {Efficient Approximation of Jacobian Matrices Involving a Non-Uniform Fast Fourier Transform (NUFFT)}, 
+        journal   = {IEEE Transactions on Computational Imaging},
+        title     = {Robust estimation of exposure ratios in multi-exposure image stacks},
         year      = {2023},
         volume    = {},
         number    = {},

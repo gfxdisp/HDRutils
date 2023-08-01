@@ -1,4 +1,4 @@
-import numpy as np, math
+import numpy as np
 import logging
 import HDRutils
 from tqdm import trange
@@ -13,27 +13,28 @@ from scipy.sparse.linalg import lsmr
 logger = logging.getLogger(__name__)
 
 def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percentile=10,
-					   invert_gamma=False, cam=None, outlier=None, ols=False):
+					   invert_gamma=False, cam=None, outlier=None, solver='wls',
+					   num_msts=50):
 	"""
 	Exposure times may be inaccurate. Estimate the correct values by fitting a linear system.
 	
 	:imgs: Image stack
 	:exif_exp: Exposure times read from image metadata
 	:metadata: Internal camera metadata dictionary
-	:method: Pick from ['cerman', 'batched_mst', 'mst', 'quick']
+	:method: Pick from ['cerman', 'mst', 'pairwise']
 	:noise_floor: All pixels smaller than this will be ignored
 	:percentile: Use a small percentage of the least noisy pixels for the estimation
 	:invert_gamma: If the images are gamma correct invert to work with linear values
 	:cam: Camera noise parameters for better estimation
-	:outlier: Pick from [None, 'cerman']
+	:outlier: Pick from [None, 'cerman', 'tiled']
 
 	:return: Corrected exposure times
 	"""
-	assert method in ('mst', 'cerman', 'batched_mst', 'quick')
-	assert outlier in (None, 'cerman')
+	assert method in ('mst', 'cerman', 'pairwise')
+	assert solver in ('base', 'ols', 'wls')
+	assert outlier in (None, 'cerman', 'tiled')
 	num_exp = len(imgs)
 	assert num_exp > 1, 'Files not found or are invalid'
-	reject = np.zeros(num_exp, dtype=bool)
 
 	# Mask out saturated and noisy pixels
 	black_frame = np.tile(metadata['black_level'].reshape(2, 2), (metadata['h']//2, metadata['w']//2))
@@ -59,9 +60,6 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		from skimage.exposure import histogram, match_histograms
 		rows, cols, m, W = np.zeros((4, 0))
 		for i in range(num_exp - 1):
-			# Ensure images are sorted in increasing order of exposure time
-			# assert all(e1 <= e2 for e1, e2 in zip(exif_exp[:-1], exif_exp[1:])), \
-			# 	   'Please name the input files in increasing order of exposure time when sorted'
 			im1, im2 = Y[i], Y[i+1]
 			mask = np.stack((im1 + black_frame < metadata['saturation_point'],
 							 im2 + black_frame < metadata['saturation_point'],
@@ -88,73 +86,11 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		num_rows = rows.shape[0]
 		data = np.ones(num_rows)
 		O = csr_matrix((data, (rows, cols)), shape=(num_rows, (num_exp - 1)))
-		argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
+		# argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
+		argmin = lambda init, lmbda: np.linalg.lstsq((diags(W) @ O).todense(), W * m)[0]
 
-	elif method == 'batched_mst':
-		logger.info(f'Estimate using logarithmic linear system with noise model')		
 
-		# If noise parameters is provided, retrieve variances, else use simplified model
-		L = np.log(Y)
-		if not cam:
-			scaled_var = 1/Y
-		else:
-			if cam == 'test':
-				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
-			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)
-
-		# Construct logarithmic sparse linear system W.O.e = W.m
-		logger.info(f'Constructing sparse matrix (O) and vector (m) using {num_pix} pixels')
-		rows = np.arange(0, (num_exp - 1)*num_exp/2*num_pix, 0.5)
-		cols, data = np.repeat(np.ones_like(rows)[None], 2, axis=0)
-		data[1::2] = -1
-		m, W = np.zeros((2, (num_exp - 1)*num_exp//2*num_pix), dtype=np.float32)
-		cnt = 0
-		for i in range(num_exp - 1):
-			# Collect unsaturated pixels from all longer exposures
-			for j in range(i + 1, num_exp):
-				# Pick valid pixels with highest weights
-				mask = np.stack((Y[i] + black_frame < metadata['saturation_point'],
-								 Y[j] + black_frame < metadata['saturation_point'],
-								 Y[i] > noise_floor, Y[j] > noise_floor)).all(axis=0)
-				weights = np.sqrt(1/(scaled_var[i] + scaled_var[j]) * mask).flatten()
-				selected = np.argsort(weights)[-num_pix:]
-				W[cnt*num_pix:(cnt + 1)*num_pix] = weights[selected]
-				m[cnt*num_pix:(cnt + 1)*num_pix] = (L[i] - L[j]).flatten()[selected]
-				cols[cnt*num_pix*2:(cnt + 1)*num_pix*2:2] = i
-				cols[cnt*num_pix*2 + 1:(cnt + 1)*num_pix*2:2] = j
-				cnt += 1
-
-		O = csr_matrix((data, (rows, cols)), shape=((num_exp - 1)*num_exp//2*num_pix, num_exp))
-
-		if method == 'batched_mst':
-			cnt = 0
-			edges = np.zeros((num_pix, (num_exp - 1)*num_exp//2, 3))
-			for i in range(num_exp - 1):
-				for j in range(i + 1, num_exp):
-					edges[:,cnt,0] = W[cnt*num_pix:(cnt + 1)*num_pix]
-					edges[:,cnt,1] = i
-					edges[:,cnt,2] = j
-					cnt += 1
-			msts = kruskals_batched(edges, num_exp)
-			x, y = np.triu_indices(num_exp, k=1)
-			xx = x[None].repeat(num_pix, axis=0)
-			yy = y[None].repeat(num_pix, axis=0)
-			ww = np.zeros_like(xx)
-			ww[:] = np.arange(num_pix)[:,None]
-			mst_weights = np.convolve(edges[msts[ww, xx, yy],0], np.ones(num_exp), mode='valid')[::num_exp]
-			selected = msts[ww, xx, yy].transpose(1,0).flatten()
-			W, m, O = W[selected], m[selected], O[selected]
-
-			# TODO: Faster way to pick top % (no need to sort)
-			idx = np.argsort(mst_weights)[-int(num_pix*percentile/100):]
-			selected = np.concatenate([i*len(mst_weights) + idx for i in range(num_exp)])
-			W, m, O = W[selected], m[selected], O[selected]
-			selected = W != 0
-			W, m, O = W[selected], m[selected], O[selected]
-			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m, x0=np.log(init), damp=lmbda)[0]
-		else:
-			argmin = lambda init, lmbda: lsmr(diags(W) @ O, W * m)[0]
-	elif method in ('mst', 'quick'):
+	elif method in ('mst', 'pairwise'):
 		# If noise parameters is provided, retrieve variances, else use simplified model
 		if not cam:
 			scaled_var = 1/Y
@@ -163,7 +99,7 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 				cam = HDRutils.NormalNoise('Sony', 'ILCE-7R', 100, bits=14)
 			scaled_var = np.stack([(cam.var(y)/y**2) for y in Y/(2**cam.bits - 1)])*(2**cam.bits - 1)
 
-		num_tiles = 10 	# Use (num_tiles)x(num_tiles) tiles; clip last few rows and cols
+		num_tiles = 16 	# Use (num_tiles)x(num_tiles) tiles; clip last few rows and cols
 		_, h, w = Y.shape
 		h = num_tiles * (h//num_tiles)
 		w = num_tiles * (w//num_tiles)
@@ -175,83 +111,80 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 		Y[Y + black_frame >= metadata['saturation_point']] = -1
 		Y[Y <= noise_floor] = -1
 
-		if method == 'quick':
-			cnt = 0
-			O = np.zeros(((num_exp-1), num_tiles*num_tiles, num_exp))
-			W, m = np.zeros((2, (num_exp-1), num_tiles*num_tiles))
-			for ee in range(num_exp - 1, 0, -1):
-				cnt = 0
-				while cnt < num_tiles*num_tiles:
-					update = False
-					for ii in range(num_tiles):
-						if cnt == num_tiles*num_tiles: break
-						for jj in range(num_tiles):
-							if cnt == num_tiles*num_tiles: break
-							if Y[ee,ii,jj].max() < 0: continue
-							r, c = np.unravel_index(Y[ee,ii,jj].flatten().argmax(), Y.shape[-2:])
-							# for ff in range(ee - 1, -1, -1):
-							ff = ee - 1
-							if Y[ff,ii,jj,r,c] > -1:
-								O[ee-1, cnt, ee] = 1
-								O[ee-1, cnt, ff] = -1
-								m[ee-1, cnt] = math.log(Y[ee,ii,jj,r,c]/Y[ff,ii,jj,r,c])
-								W[ee-1, cnt] = 1/(scaled_var[ee,ii,jj,r,c] + scaled_var[ff,ii,jj,r,c])
-								Y[ee,ii,jj,r,c] = -1
-								cnt += 1
-								update = True
-								# break
-					if not update:
-						logger.error(f'Can not align exposure {ee-1}; too few well-exposed pixels found')
-						reject[ee-1] = True
-						W[ee-1] = 0
-						break
-			O = O.reshape((num_exp-1)*num_tiles*num_tiles, num_exp)
-			m, W = m.flatten(), W.flatten()
-			O, m, W = O[W != 0], m[W != 0], W[W != 0]
-		elif method == 'mst':
-			num_msts = 50
-			# Determine how many MSTs to select
-			# This will be constant for all exposures for a given tile
-			thresholds = np.sort(Y[1:].reshape(num_exp-1, num_tiles, num_tiles, -1))[...,-num_msts]
-			valid = np.logical_and(Y[1:] > thresholds[...,None,None], Y[:-1] > -1)
-			num_selected = valid.sum(axis=(-1,-2)).min(axis=0)
+		Y = Y.reshape(num_exp, num_tiles*num_tiles, -1)
+		scaled_var = scaled_var.reshape(num_exp, num_tiles*num_tiles, -1)
 
-			# Skip frames that are mostly noisy
-			skip = np.logical_or(num_selected == 0, thresholds.min(axis=0) < noise_floor*5)
-			valid = valid * np.logical_not(skip).reshape(1, num_tiles, num_tiles, 1, 1)
+		# Determine how many MSTs to select
+		# This will be constant for all exposures for a given tile
+		thresholds = np.sort(Y[1:])[...,-num_msts]
+		valid = np.logical_and(Y[1:] > thresholds[...,None], Y[:-1] > -1)
+		num_selected = valid.sum(axis=-1).min(axis=0)
 
-			# Set 0/0 to 0 instead of inf and log(-ve) to 0 instead of nan
-			div = lambda a,b: np.divide(a, b, out=np.zeros_like(b), where=b!=0)
-			log = lambda a: np.log(a, out=np.zeros_like(a), where=a>0)
-			weights = div(1, scaled_var[:-1]*valid + scaled_var[1:]*valid)#.reshape(num_exp-1, num_tiles, num_tiles, -1)
-			log_ratios = log(div(Y[1:], Y[:-1]))
+		# Skip frames that are mostly noisy
+		skip = num_selected < num_msts*0.5
+		valid = np.logical_and(valid, np.logical_not(skip)[None,:,None])
 
-			# Stopped vectorized processing since each tile will have different contributions
-			# to the final linear system W.O.e = W.m
-			W, O, m = [], [], []
-			for ii in range(num_tiles):
-				for jj in range(num_tiles):
-					if skip[ii,jj]: continue
-					O.append(np.zeros((num_selected[ii,jj]*(num_exp-1), num_exp), dtype=np.float32))
-					for ee in range(num_exp-1):
-						W.append(weights[ee,ii,jj,valid[ee,ii,jj]])
-						idx = np.argsort(W[-1])[-num_selected[ii,jj]:]
-						W[-1] = W[-1][idx]
-						m.append(log_ratios[ee,ii,jj,valid[ee,ii,jj]][idx])
-						O[-1][ee*num_selected[ii,jj]:(ee+1)*num_selected[ii,jj],ee] = -1
-						O[-1][ee*num_selected[ii,jj]:(ee+1)*num_selected[ii,jj],ee+1] = 1
-			if len(W) == 0:
-				logger.error(f'Exposure estimation failed. One or more of the frames are underexposed.')
-				return exif_exp
-			W, O, m = [np.concatenate(a) for a in (W, O, m)]
-			if ols: W[:] = 1
+		# Stopped vectorized processing since each tile will have different contributions
+		# to the final linear system W.O.e = W.m
+		W, O, m = [], [], []
+		for tt in range(num_tiles*num_tiles):
+			if skip[tt]: continue
+			if solver == 'base':
+				O_tile = np.zeros((num_selected[tt]*(num_exp-1), num_exp - 1), dtype=np.float32)
+			else:
+				O_tile = np.zeros((num_selected[tt]*(num_exp-1), num_exp), dtype=np.float32)
+			W_tile, m_tile = [], []
+			for ee in range(num_exp-1):
+				# Pick "num_selected[tt]" highest weights that are valid in exposure ee+1
+				# Then identify longest exposure for each pixel location
+				if solver in ('base', 'ols'):
+					weights = Y[ee,tt,valid[ee,tt]] + Y[ee+1,tt,valid[ee,tt]]
+				else:
+					weights = 1/(scaled_var[ee,tt,valid[ee,tt]] + scaled_var[ee+1,tt,valid[ee,tt]])
+					# weights = 1/(1/Y[ee,tt,valid[ee,tt]] + 1/Y[ee+1,tt,valid[ee,tt]])
+				idx = np.argsort(weights)[-num_selected[tt]:]
+				longest = np.zeros_like(idx)
+				if method == 'pairwise':
+					longest[:] = ee + 1
+				if method == 'mst':
+					for ff in range(num_exp-1, ee, -1):
+						candidates = Y[ff,tt,valid[ee,tt]][idx]
+						longest[np.logical_and(longest == 0, candidates > -1,)] = ff
+						if (longest > 0).all(): break
+				# Update the linear system
+				if solver == 'base':
+					O_tile[ee*num_selected[tt]:(ee+1)*num_selected[tt],ee] = 1
+					m_tile.append(Y[:,tt,valid[ee,tt]][:,idx][longest,np.arange(num_selected[tt])] / Y[ee,tt,valid[ee,tt]][idx])
+					W_tile = np.ones_like(m_tile)
+				else:
+					weights = 1/(scaled_var[ee,tt,valid[ee,tt]][idx] + scaled_var[:,tt,valid[ee,tt]][:,idx][longest,np.arange(num_selected[tt])])
+					# weights = 1/(1/Y[ee,tt,valid[ee,tt]][idx] + 1/Y[:,tt,valid[ee,tt]][:,idx][longest,np.arange(num_selected[tt])])
+					W_tile.append(weights)
+					m_tile.append(np.log(Y[:,tt,valid[ee,tt]][:,idx][longest,np.arange(num_selected[tt])] / Y[ee,tt,valid[ee,tt]][idx]))
+					O_tile[ee*num_selected[tt]:(ee+1)*num_selected[tt],ee] = -1
+					O_tile[ee*num_selected[tt]:(ee+1)*num_selected[tt]][np.arange(num_selected[tt]),longest] = 1
+			W_tile, m_tile = [np.concatenate(a) for a in (W_tile, m_tile)]
+			if outlier == 'tiled':
+				e_tile = np.linalg.lstsq(np.diag(np.sqrt(W_tile)) @ O_tile, np.sqrt(W_tile) * m_tile, rcond=None)[0]
+				e_tile = np.exp(e_tile - e_tile.max()) * exif_exp.max()
+				if (np.abs(e_tile - exif_exp)/exif_exp > 1).any():
+					continue
 
-		argmin = lambda init, lmbda: np.linalg.inv(O.T @ np.diag(W) @ O + lmbda*np.eye(num_exp)) @ \
-									 (O.T @ np.diag(W) @ m + lmbda*np.log(init))
+			O.append(O_tile)
+			W.append(W_tile)
+			m.append(m_tile)
+
+		if len(W) == 0:
+			logger.error(f'Exposure estimation failed. One or more of the frames are underexposed.')
+			return exif_exp, np.nan
+		W, O, m = [np.concatenate(a) for a in (W, O, m)]
+		if solver == 'ols': W[:] = 1
+
+		argmin = lambda init, lmbda: np.linalg.lstsq(np.diag(np.sqrt(W)) @ O, np.sqrt(W) * m, rcond=None)[0]
 
 	if outlier == 'cerman':
 		err_prev = np.finfo(float).max
-		t = trange(100, leave=False)
+		t = trange(1000, leave=False)
 		for i in t:
 			exp = argmin(exif_exp, 10)
 			err = (W*(O @ exp - m))**2
@@ -265,177 +198,16 @@ def estimate_exposures(imgs, exif_exp, metadata, method, noise_floor=16, percent
 
 	exp = argmin(exif_exp, 10)
 
-	if method == 'cerman':
+	if method == 'cerman' or solver == 'base':
 		exp = np.append(exp, exif_exp[-1])
 		for e in range(num_exp - 2, -1, -1):
 			exp[e] = exif_exp[e+1]/exp[e]
-	elif method in ('mst', 'batched_mst', 'quick'):
+	elif method in ('mst', 'pairwise'):
 		exp = np.exp(exp - exp.max()) * exif_exp.max()
 
 	logger.info(f'Exposure times in EXIF: {exif_exp}, estimated exposures: {exp}.')
-	reject = np.logical_or(reject, np.maximum(exp/exif_exp, exif_exp/exp) > 2)
+	reject = np.abs(exp - exif_exp)/exif_exp > 2
 	exp[reject] = exif_exp[reject]
 	if reject.any():
 		logger.warning(f'Exposure estimation failed {reject}. Reverting back to EXIF data for these values.')
 	return exp
-
-
-# Reference: https://github.com/choidami/sst/blob/main/core/kruskals/kruskals.py
-def get_root(parents, node):
-    # find path of objects leading to the root
-    path = [node]
-    root = parents[node]
-    while root != path[-1]:
-      path.append(root)
-      root = parents[root]
-
-    # compress the path and return
-    for ancestor in path:
-      parents[ancestor] = root
-    return parents, root
-
-def kruskals(weights_and_edges, n):
-	sorted_edges = weights_and_edges[np.argsort(weights_and_edges[:,0]),1:][::-1]
-
-	parents = np.arange(n)
-	weights = np.ones(n)
-	adj_matrix = np.zeros((n, n), dtype=bool)
-	for i, j in sorted_edges:
-		i, j = int(i), int(j)
-		parents, root_i = get_root(parents, i)
-		parents, root_j = get_root(parents, j)
-
-		if root_i != root_j:
-			# Combine two forests if i and j are not in the same forest.
-			heavier = max([(weights[root_i], root_i), (weights[root_j], root_j)])[1]
-			for r in [root_i, root_j]:
-				if r != heavier:
-					weights[heavier] = weights[heavier] + weights[r]
-					parents[r] = heavier
-
-			# Update top-right of adjacency matrix.
-			adj_matrix[i][j] = True
-	return adj_matrix
-
-
-def get_root_batched(parents, node, n):
-	bs = parents.shape[0]
-	arange = np.arange(bs)
-	# Find path of nodes leading to the root.
-	path = np.zeros_like(parents)
-	path[:, 0] = node
-	root = parents[np.arange(bs), node]
-	for i in range(1, n):
-		path[:, i] = root
-		root = parents[np.arange(bs), root]
-	# Compress the path and return.
-	for i in range(1, n):
-		parents[arange, path[:, i]] = root
-	return parents, root
-
-def gather_numpy(self, dim, index):
-    """
-    Gathers values along an axis specified by dim.
-    For a 3-D tensor the output is specified by:
-        out[i][j][k] = input[index[i][j][k]][j][k]  # if dim == 0
-        out[i][j][k] = input[i][index[i][j][k]][k]  # if dim == 1
-        out[i][j][k] = input[i][j][index[i][j][k]]  # if dim == 2
-
-    :param dim: The axis along which to index
-    :param index: A tensor of indices of elements to gather
-    :return: tensor of gathered values
-    """
-    idx_xsection_shape = index.shape[:dim] + index.shape[dim + 1:]
-    self_xsection_shape = self.shape[:dim] + self.shape[dim + 1:]
-    if idx_xsection_shape != self_xsection_shape:
-        raise ValueError("Except for dimension " + str(dim) +
-                         ", all dimensions of index and self should be the same size")
-    if index.dtype != np.dtype('int_'):
-        raise TypeError("The values of index must be integers")
-    data_swaped = np.swapaxes(self, 0, dim)
-    index_swaped = np.swapaxes(index, 0, dim)
-    gathered = np.choose(index_swaped, data_swaped)
-    return np.swapaxes(gathered, 0, dim)
-
-def kruskals_batched(weights_and_edges, n):
-	"""Batched kruskal's algorithm for Maximumim spanning tree.
-	Args:
-		weights_and_edges: Shape (batch size, n * (n - 1) / 2, 3), where
-			weights_and_edges[.][i] = [weight_i, node1_i, node2_i] for edge i.
-		n: Number of nodes.
-	Returns:
-		Adjacency matrix. Shape (batch size, n, n)
-	"""
-	batch_size = weights_and_edges.shape[0]
-	arange = np.arange(batch_size)
-	# Sort edges based on weights, in descending order.
-	sorted_weights = np.argsort(-1*weights_and_edges[:,:,0])
-	dummy = sorted_weights[...,None].repeat(3, axis=-1)
-	sorted_edges = gather_numpy(weights_and_edges, 1, dummy)[..., 1:]
-	sorted_edges = sorted_edges.transpose((1,0,2))
-
-	# Initialize weights and edges.
-	weights = np.ones((batch_size, n))
-	parents = np.arange(n)[None].repeat(batch_size, 0)
-
-	adj_matrix = np.zeros((batch_size, n, n), dtype=bool)
-	for edge in sorted_edges:
-		i, j = edge[:,0].astype(int), edge[:,1].astype(int)
-		parents, root_i = get_root_batched(parents, i, n)
-		parents, root_j = get_root_batched(parents, j, n)
-		is_i_and_j_not_in_same_forest = (root_i != root_j).astype(np.int32)
-
-		# Combine two forests if i and j are not in the same forest.
-		is_i_heavier_than_j = (
-			weights[arange, root_i] > weights[arange, root_j]).astype(np.int32)
-		weights_root_i = weights[arange, root_i] + (
-			(weights[arange, root_j] * is_i_heavier_than_j)
-			* is_i_and_j_not_in_same_forest +
-			0.0 * (1.0 - is_i_and_j_not_in_same_forest))
-		parents_root_i = (
-			(root_i * is_i_heavier_than_j +  root_j * (1 - is_i_heavier_than_j)) 
-			* is_i_and_j_not_in_same_forest +
-			root_i * (1 - is_i_and_j_not_in_same_forest))
-		weights_root_j = weights[arange, root_j] + (
-			weights[arange, root_i] * (1 - is_i_heavier_than_j) 
-			* is_i_and_j_not_in_same_forest +
-			0.0 * (1.0 - is_i_and_j_not_in_same_forest))
-		parents_root_j = (
-			(root_i * is_i_heavier_than_j +  root_j * (1 - is_i_heavier_than_j)) 
-			* is_i_and_j_not_in_same_forest +
-			root_j * (1 - is_i_and_j_not_in_same_forest))
-		weights[arange, root_i] = weights_root_i
-		weights[arange, root_j] = weights_root_j
-		parents[arange, root_i] = parents_root_i
-		parents[arange, root_j] = parents_root_j
-
-		# Update adjacency matrix.
-		adj_matrix[arange, i, j] = is_i_and_j_not_in_same_forest
-	return adj_matrix
-
-
-def main():
-	cost = np.array([[100, 2, 100, 6, 100],
-		[2, 100, 3, 8, 5],
-		[100, 3, 100, 100, 7],
-		[6, 8, 100, 100, 9],
-		[100, 5, 7, 9, 100]])
-	num_nodes = cost.shape[0]
-	edges = []
-	for i in range(num_nodes-1):
-		for j in range(i+1, num_nodes):
-			if cost[i,j] != 100:	# 100 = nan (missing edge)
-				edges.append((cost[i,j], i, j))
-	edges = np.stack(edges)
-	mst = kruskals(edges, num_nodes)
-	print(mst)
-	print(cost[mst], cost[mst].sum())
-	print(np.where(mst))
-
-	all_edges = np.stack([edges]*10)
-	all_edges[::2,:,0] *= -1
-	msts = kruskals_batched(all_edges, num_nodes)
-	print(msts[:2])
-
-if __name__=='__main__':
-    main()

@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
-		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, ols=False):
+		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, solver='wls',
+		  return_exif_exp=False):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -35,10 +36,12 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:demosaic: Demosaicing algorithm if "demosaic_first" is False. Pick 1 of ['bilinear', 'malvar', 'menon']
 	:clip_highlights: Clip pixels that are saturated in the lowest exposure
 	:bits: Number of quantization bits for simulated data
+	:solver: How to solve the linear system for exposure estimation
 
 	:return: Merged FP32 HDR image, mask of unsaturated pixels
 	"""
 	data = get_metadata(files, exp, gain, aperture, color_space, saturation_percent, black_level, bits)
+	exif = data['exp'].copy()
 	if estimate_exp:
 		# TODO: Handle imamge stacks with varying gain and aperture
 		assert len(set(data['gain'])) == 1 and len(set(data['aperture'])) == 1
@@ -56,16 +59,17 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 			black_frame = np.ones_like(Y[0]) * data['black_level'][:3][None,None]
 		for i in range(data['N']):
 			# Skip images where > 95% of the pixels are overexposed or underexposed
-			noise_floor = data['saturation_point']/1000
+			noise_floor = max(data['saturation_point']/1000, np.abs((Y[0] - black_frame).min()))
 			if (Y[i] >= data['saturation_point']).sum() > 0.95*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to saturation')
 				estimate[i] = False
 			elif (Y[i] - black_frame <= noise_floor).sum() > 0.95*Y[i].size:
 				logger.warning(f'Skipping exposure estimation for file {files[i]} due to noise')
 				estimate[i] = False
-		data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
-												   estimate_exp, cam=cam, outlier=outlier,
-												   noise_floor=noise_floor, ols=ols)
+		if estimate.sum() > 2:
+			data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
+													   estimate_exp, cam=cam, outlier=outlier,
+													   noise_floor=noise_floor, solver=solver)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
@@ -94,7 +98,11 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if clip_highlights:
 		logger.info(f'Clipping all saturated highlights to {HDR.max()}')
 		HDR[np.logical_not(unsaturated)] = HDR.max()
-	return HDR.astype(np.float32), unsaturated
+
+	if return_exif_exp:
+		return HDR.astype(np.float32), exif, data['exp']
+	else:
+		return HDR.astype(np.float32), unsaturated
 
 
 def imread_demosaic_merge(files, metadata, do_align, sat_percent):

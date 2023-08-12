@@ -122,9 +122,9 @@ If you find this package useful, we would be grateful if you cite
         journal   = {IEEE Transactions on Computational Imaging},
         title     = {Robust estimation of exposure ratios in multi-exposure image stacks},
         year      = {2023},
-        volume    = {},
+        volume    = {9},
         number    = {},
-        pages     = {},
-        doi       = {},
+        pages     = {721-731},
+        doi       = {10.1109/TCI.2023.3301338},
         url       = {https://www.cl.cam.ac.uk/research/rainbow/projects/exposure-estimation/},
     }

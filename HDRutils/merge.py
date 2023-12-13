@@ -5,15 +5,15 @@ import numpy as np
 import HDRutils.io as io
 from HDRutils.utils import *
 from HDRutils.exposures import estimate_exposures
-from HDRutils.deglare import deglareRGB_img, deglare_channel
+from HDRutils.deglare import deglare_bayer
 logger = logging.getLogger(__name__)
 
-# for MTF inversion: use merge(demosaic_first=False, color_space="raw")
+import numpy as np
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
-		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, ols=False, sfr=None):
+		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, ols=False, sfr_json=None):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -71,7 +71,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
 	else:
-		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic, sfr=sfr)
+		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic, sfr_json=sfr_json)
 
 	if num_sat > 0:
 		logger.warning(f'{num_sat/(data["h"]*data["w"]):.3f}% of pixels (n={num_sat}) are ' \
@@ -147,7 +147,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	return HDR, num_sat
 
 
-def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, sfr=None):
+def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, sfr_json=None):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -224,20 +224,20 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, sfr=None
 				img, metadata['saturation_point'])))
 		else:
 			unsaturated = get_unsaturated(img, metadata['saturation_point'])
-		
+
 		# Subtract black level for linearity
 		img -= black_frame
 
 		X_times_t = img / metadata['gain'][i] / metadata['aperture'][i]
 		denom[unsaturated] += metadata['exp'][i]
 		num[unsaturated] += X_times_t[unsaturated]
-		
+
 	HDR_bayer = num / denom
 
-	if sfr is not None:
-		print("applying deglaring")
-		HDR_bayer = deglare_channel(HDR_bayer, sfr=sfr, freq_factor=1.0)[:,:,0]
-		#deglare_channel(img, sfr, lowest_amp=0.5, freq_factor=1.0, amp_factor=1.0, plot=False):
+	# Deglaring (MTF Inversion)
+	if sfr_json is not None:
+		logger.info("Applying deglaring")
+		HDR_bayer = deglare_bayer(HDR_bayer, sfr_json=sfr_json)
 
 	# Libraw does not support 32-bit values. Use colour-demosaicing instead:
 	# https://colour-demosaicing.readthedocs.io/en/latest/manual.html

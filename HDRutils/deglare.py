@@ -4,8 +4,7 @@ import numpy as np
 from scipy.optimize import curve_fit
 from scipy.fftpack import fft2, ifft2, fftshift, ifftshift
 import matplotlib.pyplot as plt
-#import pyexr
-import image_io
+import json
 
 def create_rho_2D(im_size, nf_rows, nf_cols):
     """
@@ -45,87 +44,48 @@ def gauss2(rho, a1, b1, c1, a2, b2, c2):
     term2 = a2 * np.exp(-((rho - b2) / c2) ** 2)
     return term1 + term2
 
-def deglare(I, gParams):
+def deglare(I, gParams, freq_factor=2.0):
     I_deconv = np.zeros_like(I)
     rho_x, rho_y = create_rho_2D(I.shape[:2], 0.5, 0.5)
     rho_x, rho_y = fftshift(rho_x), fftshift(rho_y)
-    rho = np.sqrt(rho_x**2 + rho_y**2)
+    rho = np.sqrt(rho_x**2 + rho_y**2) / freq_factor
     mtf_filter = gauss2(rho, *gParams)
     for cc in range(1):
         If = fftshift(fft2(I[:, :, cc]))
         I_deconv[:, :, cc] = np.abs(ifft2(ifftshift(If / mtf_filter)))
     return I_deconv
 
-def createFit(mtf_freq, mtf_amp):
-    #p0 = [1.0, 0.0, 0.0814, 0.6275, 0.138, 0.1001]
-    p0 = [0.5802, -0.01012, 0.1046, 0.4896, 0.3853, 0.9892]
-    low_bounds = [-np.inf, -np.inf, 0.0, -np.inf, -np.inf, 0.0]
-    up_bounds = [np.inf, np.inf, np.inf, np.inf, np.inf, np.inf]
-    params, _ = curve_fit(gauss2, xdata=mtf_freq, ydata=mtf_amp, p0=p0, bounds=(low_bounds, up_bounds), method='trf')
-    return params
+def bayer2rggb(bayer): # input: 2D array with bayer pattern [[r,g],[g,b]]
+	r = bayer[0::2, 0::2]  # red pixels
+	g1 = bayer[0::2, 1::2]  # green pixels 1
+	g2 = bayer[1::2, 0::2]  # green pixels 2
+	b = bayer[1::2, 1::2]  # blue pixels
+	return np.array([r, g1, g2, b]) # output: array with 4x 2D arrays (rggb)
 
-def plotFreqVsAmp(mtf_freq, mtf_amp, lowest_amp, gParams):
-        plt.figure('Deglaring GM Fit')
-        plt.scatter(mtf_freq, mtf_amp, label="mtf_amp vs. mtf_freq", c='k', marker='.')
-        plt.hlines(y=lowest_amp, xmin=0.0, xmax=0.5, linewidth=2, color='k', linestyle='--', alpha=0.5)
-        plt.plot(mtf_freq, gauss2(mtf_freq, *gParams), label="GM Fit", c='b', linewidth=2, alpha=0.5)
-        plt.ylim([0.0, 1.0])
-        plt.xlabel('mtf_freq')
-        plt.ylabel('mtf_amp')
-        plt.legend(loc='upper right')
-        plt.grid(True)
+def rggb2bayer(rggb): # input: array with 4x 2D arrays (rggb)
+	bayer = np.zeros([rggb.shape[1]*2, rggb.shape[2]*2])
+	bayer[0::2, 0::2] = rggb[0]
+	bayer[0::2, 1::2] = rggb[1]
+	bayer[1::2, 0::2] = rggb[2]
+	bayer[1::2, 1::2] = rggb[3]
+	return bayer # ouput: 2D array with bayer pattern [[r,g],[g,b]]
 
-# deglare an image with a single channel (using the luminance in the SFR)
-def deglare_channel(img, sfr, lowest_amp=0.5, freq_factor=1.0, amp_factor=1.0, plot=False):
+# deglare an image with a single channel (using the luminance in the SFR).
+def deglare_channel(img, gParams):
     if len(img.shape) == 2:
         img = img.reshape(img.shape[0], img.shape[1], 1)
-
-    # Read data
-    T = np.genfromtxt(sfr, delimiter=',')
-    mtf_freq, mtf_amp = T[:, 0], T[:, 4]
-
-    # Multiplicative factors
-    mtf_freq *= freq_factor
-    mtf_amp  *= amp_factor
-
-    # Filter data
-    mtf_amp = mtf_amp[mtf_freq <= 0.5]
-    last_valid_index = np.where(mtf_freq <= 0.35)[0][-1]
-    mtf_amp[last_valid_index:] = mtf_amp[last_valid_index]
-    mtf_freq = mtf_freq[mtf_freq <= 0.5]
-    mtf_amp_clipped = np.clip(mtf_amp, lowest_amp, 1.0)
-    # Fit
-    gParams = createFit(mtf_freq, mtf_amp_clipped)
-    print("Fitted GM Parameters:", gParams)
-    if plot is True:
-        plotFreqVsAmp(mtf_freq, mtf_amp, lowest_amp, gParams)
     img_deconv = deglare(img, gParams)
-    return img_deconv
+    return img_deconv[:,:,0]
 
-# deglare an image per channel (using the RGB curves of SFR instead of luminance)
-def deglareRGB_img(img, sfr, lowest_amp=0.5, freq_factor=1.0, amp_factor=1.0, plot=False):
-    # Read data
-    T = np.genfromtxt(sfr, delimiter=',')
-    gParams, img_deconv = [], []
-    for irgb in [0, 1, 2]:
-        mtf_freq, mtf_amp = T[:, 0], T[:, irgb+1]
+# deglare an image with a bayer pattern RGGB
+def deglare_bayer(bayer_img, sfr_json):
+    # Read GMM Fit params (Luminance)
+    with open(sfr_json) as f:
+        gParams_dict = json.load(f)
+    gParams = gParams_dict["Y"]
 
-        # Multiplicative factors
-        mtf_freq *= freq_factor
-        mtf_amp  *= amp_factor
-
-        # Filter data
-        mtf_amp = mtf_amp[mtf_freq <= 0.5]
-        last_valid_index = np.where(mtf_freq <= 0.35)[0][-1]
-        mtf_amp[last_valid_index:] = mtf_amp[last_valid_index]
-        mtf_freq = mtf_freq[mtf_freq <= 0.5]
-        mtf_amp_clipped = np.clip(mtf_amp, lowest_amp, 1.0)
-        # Fit
-        gParams.append(createFit(mtf_freq, mtf_amp_clipped))
-        print("Fitted GM Parameters:", gParams[irgb])
-        if plot is True:
-            plotFreqVsAmp(mtf_freq, mtf_amp, lowest_amp, gParams[irgb])
-        img_deconv.append(deglare(img[:,:,irgb:irgb+1], gParams[irgb]))
-    img_deconv = np.moveaxis(np.squeeze(img_deconv), 0, -1)
-    return img_deconv
-
+    rggb = bayer2rggb(bayer_img)
+    for irggb in range(4):
+        rggb[irggb] = deglare_channel(rggb[irggb], gParams)
+    bayer_ret = rggb2bayer(rggb)
+    return bayer_ret

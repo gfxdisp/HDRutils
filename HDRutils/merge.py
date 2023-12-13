@@ -13,7 +13,7 @@ import numpy as np
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
-		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, ols=False, sfr_json=None):
+		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, ols=False, mtf_json=None):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -71,7 +71,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
 	else:
-		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic, sfr_json=sfr_json)
+		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic, mtf_json=mtf_json)
 
 	if num_sat > 0:
 		logger.warning(f'{num_sat/(data["h"]*data["w"]):.3f}% of pixels (n={num_sat}) are ' \
@@ -147,7 +147,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	return HDR, num_sat
 
 
-def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, sfr_json=None):
+def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, mtf_json=None):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -235,9 +235,9 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, sfr_json
 	HDR_bayer = num / denom
 
 	# Deglaring (MTF Inversion)
-	if sfr_json is not None:
+	if mtf_json is not None:
 		logger.info("Applying deglaring")
-		HDR_bayer = deglare_bayer(HDR_bayer, sfr_json=sfr_json)
+		HDR_bayer = deglare_bayer(HDR_bayer, mtf_json=mtf_json)
 
 	# Libraw does not support 32-bit values. Use colour-demosaicing instead:
 	# https://colour-demosaicing.readthedocs.io/en/latest/manual.html

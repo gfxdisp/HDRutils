@@ -70,7 +70,7 @@ def rggb2bayer(rggb): # input: array with 4x 2D arrays (rggb)
 	bayer[1::2, 1::2] = rggb[3]
 	return bayer # ouput: 2D array with bayer pattern [[r,g],[g,b]]
 
-# deglare an image with a single channel (using the luminance in the SFR).
+# deglare an image with a single channel (using the luminance in the MTF).
 def deglare_channel(img, gParams):
     if len(img.shape) == 2:
         img = img.reshape(img.shape[0], img.shape[1], 1)
@@ -78,9 +78,9 @@ def deglare_channel(img, gParams):
     return img_deconv[:,:,0]
 
 # deglare an image with a bayer pattern RGGB
-def deglare_bayer(bayer_img, sfr_json):
+def deglare_bayer(bayer_img, mtf_json):
     # Read GMM Fit params (Luminance)
-    with open(sfr_json) as f:
+    with open(mtf_json) as f:
         gParams_dict = json.load(f)
     gParams = gParams_dict["Y"]
 

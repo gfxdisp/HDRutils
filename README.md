@@ -101,6 +101,20 @@ Exposure metadata from EXIF may be inaccurate and it may be benificial to estima
 
 This feauture is currently disabled, and EXIF values are used by default. To enable exposure estimation, run `HDRutils.merge(..., estimate_exp='mst')`.
 
+### Deglaring via MTF inversion
+Camera lens aberrations produce attenuations of spatial frequencies, which have a strong effect on the image sharpness.
+The Modulation Transfer Function (MTF) models the response of the camera as a function of the spatial frequency (in cycles/pixel),
+and can be used to increase the sharpness of images captured by the camera, by applying a Fourier space deconvolution
+[[Chen et al. 2023]](https://stereohdrgloss.mpi-inf.mpg.de/#:~:text=A%20faithful%20reproduction%20of%20gloss,a%20real%2Dworld%20reference%20object.).
+
+The procedure to compute a camera's MTF is described in detail [here](https://github.com/gfxdisp/lf_capture/tree/master/deglare).
+The output of this procedure is a JSON file describing the MTF via the coefficients of a Gaussian Mixture Model. This file can be used
+in HDRutils to perform the deglaring, after merging RAW files and before demosaicing. To perform merge+deglare+demosaic on a set of RAW images,
+run the merge function with the following arguments:
+```
+HDRutils.merge(..., color_space="raw", demosaic_first=False, mtf_json=<mtf.json>)
+```
+
 ## Noise simulation
 Generating realistic camera noise using calibrated parameters of real-world cameras is described [here](HDRutils/noise_modeling/).
 

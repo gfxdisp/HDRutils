@@ -5,15 +5,16 @@ import numpy as np
 import HDRutils.io as io
 from HDRutils.utils import *
 from HDRutils.exposures import estimate_exposures
-
+from HDRutils.deglare import deglare_bayer
 logger = logging.getLogger(__name__)
 
+import numpy as np
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
 		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None,
 		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, solver='wls',
-		  return_exif_exp=False):
+		  return_exif_exp=False, mtf_json=None):
 	"""
 	Merge multiple SDR images into a single HDR image after demosacing. This is a wrapper
 	function that extracts metadata and calls the appropriate function.
@@ -37,6 +38,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:clip_highlights: Clip pixels that are saturated in the lowest exposure
 	:bits: Number of quantization bits for simulated data
 	:solver: How to solve the linear system for exposure estimation
+	:mtf_json: JSON file with fitted MTF curves for deglaring.
 
 	:return: Merged FP32 HDR image, mask of unsaturated pixels
 	"""
@@ -68,13 +70,13 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 				estimate[i] = False
 		if estimate.sum() > 2:
 			data['exp'][estimate] = estimate_exposures(Y[estimate], data['exp'][estimate], data,
-													   estimate_exp, cam=cam, outlier=outlier,
-													   noise_floor=noise_floor, solver=solver)
+												   estimate_exp, cam=cam, outlier=outlier,
+												   noise_floor=noise_floor, solver=solver)
 
 	if demosaic_first:
 		HDR, num_sat = imread_demosaic_merge(files, data, do_align, saturation_percent)
 	else:
-		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic)
+		HDR, num_sat = imread_merge_demosaic(files, data, do_align, bayer_pattern, demosaic, mtf_json=mtf_json)
 
 	if num_sat > 0:
 		logger.warning(f'{num_sat/(data["h"]*data["w"]):.3f}% of pixels (n={num_sat}) are ' \
@@ -154,7 +156,7 @@ def imread_demosaic_merge(files, metadata, do_align, sat_percent):
 	return HDR, num_sat
 
 
-def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic):
+def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, mtf_json=None):
 	"""
 	Merge RAW images before demosaicing. This function merges in an online
 	way and can handle a large number of inputs with little memory.
@@ -231,15 +233,20 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic):
 				img, metadata['saturation_point'])))
 		else:
 			unsaturated = get_unsaturated(img, metadata['saturation_point'])
-		
+
 		# Subtract black level for linearity
 		img -= black_frame
 
 		X_times_t = img / metadata['gain'][i] / metadata['aperture'][i]
 		denom[unsaturated] += metadata['exp'][i]
 		num[unsaturated] += X_times_t[unsaturated]
-		
+
 	HDR_bayer = num / denom
+
+	# Deglaring (MTF Inversion)
+	if mtf_json is not None:
+		logger.info("Applying deglaring")
+		HDR_bayer = deglare_bayer(HDR_bayer, mtf_json=mtf_json)
 
 	# Libraw does not support 32-bit values. Use colour-demosaicing instead:
 	# https://colour-demosaicing.readthedocs.io/en/latest/manual.html

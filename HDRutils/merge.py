@@ -8,7 +8,11 @@ from HDRutils.exposures import estimate_exposures
 from HDRutils.deglare import deglare_bayer
 logger = logging.getLogger(__name__)
 
+import argparse
+
 import numpy as np
+
+import HDRutils
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
@@ -266,3 +270,35 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, mtf_json
 	HDR = metadata['libraw_scale'](HDR)
 
 	return HDR, num_sat
+
+
+
+# -----------------------------------
+# Command-line Arguments
+# -----------------------------------
+# do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
+#		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',#
+#		  exp=None, gain=None, aperture=None, estimate_exp=None, cam=None
+#		  outlier=None, demosaic='bilinear', clip_highlights=False, bits=None, solver='wls',
+#		  return_exif_exp=False, mtf_json=None
+def parse_args():
+	parser = argparse.ArgumentParser(description="Merge multiple exposures into an HDR image")
+	parser.add_argument('raw_images', type=str, nargs='+', help="List of file names of camera RAW images") 
+	parser.add_argument("--demosaic_first", action='store_true', default=False, help="Demoisaic images using libraw before merging. By default, the image will be demosaiced after HDR merging (preferred).")
+	parser.add_argument("--estimate-exposures", action='store_true', default=False, help="Estimate exposure times of HDR images to eliminate potential contouring artifactrs.")	
+	parser.add_argument("--color-space", choices=['sRGB', 'raw', 'Adobe', 'XYZ'], default='sRGB', help="Convert the resulting image to the given colour space.")
+	parser.add_argument("-o", "--output", type=str, default='merged.exr', help="Name of the resulting OpenEXR file. 'merged.exr' is the default name")
+	args = parser.parse_args()
+	return args
+
+if __name__ == '__main__':
+
+	args = parse_args()
+
+	logging.basicConfig(format='[%(levelname)s] %(message)s', level=logging.INFO)
+
+	(hdr_img, num_sat) = merge( args.raw_images, demosaic_first=args.demosaic_first, estimate_exp='gfxdisp' if args.estimate_exposures else None, color_space=args.color_space )
+
+	logger.info( f"Merged HDR saved to '{args.output}'" )
+	HDRutils.imwrite(args.output, hdr_img)
+

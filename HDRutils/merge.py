@@ -9,6 +9,7 @@ from HDRutils.deglare import deglare_bayer
 logger = logging.getLogger(__name__)
 
 import numpy as np
+import argparse
 
 def merge(files, do_align=False, demosaic_first=True, normalize=False, color_space='sRGB',
 		  wb=None, saturation_percent=0.98, black_level=0, bayer_pattern='RGGB',
@@ -33,7 +34,7 @@ def merge(files, do_align=False, demosaic_first=True, normalize=False, color_spa
 	:aperture: Aperture required when metadata is not present
 	:estimate_exp: Estimate exposure times by solving a system. Pick 1 of ['gfxdisp','cerman']
 	:cam: Camera noise model for exposure estimation
-	:outlier: Iterative outlier removal. Pick 1 of [None, 'cerman', 'ransac']
+	:outlier: Iterative outlier removal. Pick 1 of [None, 'cerman', 'tiled']
 	:demosaic: Demosaicing algorithm if "demosaic_first" is False. Pick 1 of ['bilinear', 'malvar', 'menon']
 	:clip_highlights: Clip pixels that are saturated in the lowest exposure
 	:bits: Number of quantization bits for simulated data
@@ -266,3 +267,60 @@ def imread_merge_demosaic(files, metadata, do_align, pattern, demosaic, mtf_json
 	HDR = metadata['libraw_scale'](HDR)
 
 	return HDR, num_sat
+
+
+def main():
+	parser = argparse.ArgumentParser(description='Merge an HDR image stack.')
+
+	parser.add_argument('files', nargs='+', help='List of files to merge')
+	parser.add_argument('--do-align', action='store_true', help='Align images by estimating homography before merging', default=False)
+	parser.add_argument('--merge-first', action='store_true', help='Merge images before demosaicing', default=False)
+	parser.add_argument('--normalize', action='store_true', help='Normalize the images to [0,1]', default=False)
+	parser.add_argument('--color-space', type=str, default='sRGB', help='Color space for output', choices=['sRGB', 'raw', 'Adobe', 'XYZ'])
+	parser.add_argument('--wb', type=str, help='White balance settings', choices=['None', 'camera'])
+	parser.add_argument('--saturation-percent', type=float, default=0.98, help='Saturation offset from reported white point')
+	parser.add_argument('--black-level', type=int, default=0, help='Black level')
+	parser.add_argument('--bayer-pattern', type=str, default='RGGB', help='Bayer pattern of the camera sensor')
+	parser.add_argument('--exp', nargs='+', type=float, help='Exposure time (in seconds)')
+	parser.add_argument('--gain', nargs='+', type=float, help='Camera gain (typically ISO/100)')
+	parser.add_argument('--aperture', nargs='+', type=float, help='Aperture value')
+	parser.add_argument('--estimate-exp', type=str, help='Estimate exposure times by solving a system', choices=['gfxdisp', 'cerman'])
+	parser.add_argument('--cam', type=str, help='Camera model')
+	parser.add_argument('--outlier', type=str, help='Outlier handling method for exposure estimation', choices=['None', 'cerman', 'tiled'])
+	parser.add_argument('--demosaic', type=str, default='bilinear', help='Demosaic method', choices=['bilinear', 'malvar', 'menon'])
+	parser.add_argument('--clip-highlights', action='store_true', help='Clip highlights in the images', default=False)
+	parser.add_argument('--bits', type=int, help='Number of bits per channel')
+	parser.add_argument('--solver', type=str, default='wls', help='Solver for merging')
+	parser.add_argument('--return-exif-exp', action='store_true', help='Return EXIF exposure', default=False)
+	parser.add_argument('--mtf-json', type=str, help='Path to MTF JSON file')
+	parser.add_argument('-o', '--output-file', type=str, help='Path to output HDR file', required=True)
+
+	args = parser.parse_args()
+	if args.outlier is not None and args.outlier.lower == 'None':
+		args.outlier = None
+
+	HDR = merge(
+		files=args.files,
+		do_align=args.do_align,
+		demosaic_first=(not args.merge_first),
+		normalize=args.normalize,
+		color_space=args.color_space,
+		wb=args.wb,
+		saturation_percent=args.saturation_percent,
+		black_level=args.black_level,
+		bayer_pattern=args.bayer_pattern,
+		exp=args.exp,
+		gain=args.gain,
+		aperture=args.aperture,
+		estimate_exp=args.estimate_exp,
+		cam=args.cam,
+		outlier=args.outlier,
+		demosaic=args.demosaic,
+		clip_highlights=args.clip_highlights,
+		bits=args.bits,
+		solver=args.solver,
+		return_exif_exp=args.return_exif_exp,
+		mtf_json=args.mtf_json
+	)
+
+	io.imwrite(args.output_file, HDR[0])

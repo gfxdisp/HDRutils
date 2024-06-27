@@ -73,6 +73,8 @@ HDRutils.imwrite('merged.exr', HDR_img)
 
 Sometimes the shortest exposure may contain saturated pixels. These cause artifacts when manual white-balance/color calibration is performed. Thus, `HDRutils.merge()` returns an unsaturated mask in addition to the merged image. The saturated pixels can be clipped after manual white-balance/color calibration.
 
+This function can also be accessed from the command line. Run `HDRmerge -h` for usage.
+
 ### Merge and demosaic or demosaic and merge?
 The default function processes each image individually using [libraw](https://www.libraw.org/) and then merges the RGB images. This result relies on the robust camera pipeline (including black-level subtraction, demosaicing, white-balance) provided by libraw, and should be suitable for most projects.
 

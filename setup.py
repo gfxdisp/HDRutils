@@ -11,7 +11,7 @@ setup(
   packages = find_packages(),
   package_data = {'HDRutils': ['noise_modeling/darktable.json']},
   include_package_data=True,
-  version = '1.0',
+  version = '1.2',
   license='MIT',
   description = 'Utility functions for performing basic operations on HDR images, including ' \
                 'merging and deghosting',
@@ -20,7 +20,7 @@ setup(
   url = 'https://github.com/gfxdisp/HDRutils',
   long_description=long_description,
   long_description_content_type='text/markdown',
-  keywords = ['HDR', 'Merging', 'Deghosting', 'simulation'],
+  keywords = ['HDR', 'Merging', 'Deghosting', 'simulation', 'exposure'],
   install_requires=[
           'numpy',
           'imageio>=2.21.2',
@@ -39,5 +39,15 @@ setup(
     'License :: OSI Approved :: MIT License',
     'Programming Language :: Python :: 3.7',
     'Programming Language :: Python :: 3.8',
-    'Programming Language :: Python :: 3.9'],
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12'],
+  
+  entry_points={
+        'console_scripts': [
+            'HDRmerge=HDRutils.merge:main'
+        ]
+    }
+
 )

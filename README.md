@@ -9,7 +9,7 @@ Some utility functions to generate HDR images from a sequence of exposure time o
 - [Capture](#multi-exposure-capture)
 - [HDR merge](#merge-input-images)
     - [Demosaicing](#merge-and-demosaic-or-demosaic-and-merge)
-    - [RAW bayer input](#merge-raw-bayer-frames-from-non-raw-formats)
+    - [RAW Bayer input](#merge-raw-bayer-frames-from-non-raw-formats)
     - [Alignment](#alignment)
     - [Exposure estimation](#exposure-estimation)
 - [Noise simulation](#noise-simulation)
@@ -53,7 +53,7 @@ HDRutils.imwrite('output_filename.exr', img)
 ```
 
 ## Multi-exposure capture
-Make sure gphoto2 is installed. Additionally, set camera to **manual mode** and **disable autofocus** on the lens. Then, decide valid exposure times (by scrolling on the camera) and run:
+Make sure gphoto2 is installed. Additionally, set the camera to **manual mode** and **disable autofocus** on the lens. Then, decide valid exposure times (by scrolling on the camera) and run:
 
 ```python
 from HDRutils.capture import DSLR
@@ -76,17 +76,17 @@ Sometimes the shortest exposure may contain saturated pixels. These cause artifa
 This function can also be accessed from the command line. Run `HDRmerge -h` for usage.
 
 ### Merge and demosaic or demosaic and merge?
-The default function processes each image individually using [libraw](https://www.libraw.org/) and then merges the RGB images. This result relies on the robust camera pipeline (including black-level subtraction, demosaicing, white-balance) provided by libraw, and should be suitable for most projects.
+The default function processes each image individually using [libraw](https://www.libraw.org/) and then merges the RGB images. This result relies on the robust camera pipeline (including black-level subtraction, demosaicing, and white-balance) provided by libraw, and should be suitable for most projects.
 
-If you need finer control over the exact radiance values, this behaviour can be overriden to merge RAW bayer images by setting the flag `demosaic_first=False`. This mode is useful when the camera is custom-calibrated and you have an exact correspondance between camera pixels with the scene luminance and/or color. Moreover, saturated pixels can be precisely identified before demosaicing. In this mode, a basic camera pipeline is reproduced with the following steps:
+If you need finer control over the exact radiance values, this behaviour can be overriden to merge RAW Bayer images by setting the flag `demosaic_first=False`. This mode is useful when the camera is custom-calibrated and you have an exact correspondence between camera pixels with the scene luminance and/or color. Moreover, saturated pixels can be precisely identified before demosaicing. In this mode, a basic camera pipeline is reproduced with the following steps:
 
 Subtract black level -> Merge image stack -> Color transformation -> White-balance
 
 Demosaicing algorithms that are currently supported can be found at [this page](https://colour-demosaicing.readthedocs.io/en/latest/colour_demosaicing.bayer.html). Change the algorithm using `HDRutils.merge(..., demosaic_first=False, demosaic=*algorithm*)`
 
 
-### Merge RAW bayer frames from non-RAW formats
-If your camera provides RAW frames in a non-standard format, you can still merge them in the camera color-space without libraw processing
+### Merge RAW Bayer frames from non-RAW formats
+If your camera provides RAW frames in a non-standard format, you can still merge them in the camera color space without libraw processing
 
 ```python
 files = ['file1.png', 'file2.png', 'file3.png']     # PNG bayer input files
@@ -95,13 +95,13 @@ HDRutils.imwrite('merged.exr', HDR_img)
 ```
 
 ### Alignment
-While merging, some ghosting artifacts can be removed by setting `HDRutils.merge(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes. Unfortunately non-rigid motion requiring dense optical flow is not yet implemented.
+While merging, some ghosting artifacts can be removed by setting `HDRutils.merge(..., align=True)`. This attempts homography alignment and corrects camera motion for still scenes. Unfortunately, non-rigid motion requiring dense optical flow is not yet implemented.
 
 
 ### Exposure estimation
-Exposure metadata from EXIF may be inaccurate and it may be benificial to estimate relative exposures directly from the image stack. Please see [our paper](https://www.cl.cam.ac.uk/research/rainbow/projects/exposure-estimation/) for details.
+Exposure metadata from EXIF may be inaccurate, and it may be beneficial to estimate relative exposures directly from the image stack. Please see [our paper](http://dx.doi.org/10.1109/TCI.2023.3301338) for details.
 
-This feauture is currently disabled, and EXIF values are used by default. To enable exposure estimation, run `HDRutils.merge(..., estimate_exp='mst')`.
+This feature is disabled by default, and EXIF values are used instead. To enable it, run `HDRutils.merge(..., estimate_exp='mst')`.
 
 ### Deglaring via MTF inversion
 Camera lens aberrations produce attenuations of spatial frequencies, which have a strong effect on the image sharpness.
@@ -130,7 +130,7 @@ If you find this package useful, we would be grateful if you cite
         year      = {2020},
         publisher = {Springer},
         pages     = {376--391},
-        url       = {http://www.cl.cam.ac.uk/research/rainbow/projects/noise-aware-merging/},
+        doi       = {10.1007/978-3-030-67070-2_23}
     }
 
     @ARTICLE{hanji2023exposures,
@@ -142,5 +142,4 @@ If you find this package useful, we would be grateful if you cite
         number    = {},
         pages     = {721-731},
         doi       = {10.1109/TCI.2023.3301338},
-        url       = {https://www.cl.cam.ac.uk/research/rainbow/projects/exposure-estimation/},
     }

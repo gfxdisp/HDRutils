@@ -22,7 +22,7 @@ To download HDRUtils, use Pypi via pip:
 
 If you prefer cloning this repository, install the dependencies using pip:
     
-    pip clone https://github.com/gfxdisp/HDRutils.git
+    git clone https://github.com/gfxdisp/HDRutils.git
     cd HDRutils
     pip install -e .
 
